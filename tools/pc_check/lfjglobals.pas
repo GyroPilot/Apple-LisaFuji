@@ -1,0 +1,295 @@
+{$V+}
+unit LfjGlobals;
+
+{ REV O  17-Oct-2026  1.1: the Space menu gets Who Is Aboard (P); a new  }
+{                      Weather menu is menu 5 (O); Test, Speed, Help   }
+{                      and Version move to 6 to 9.  crUrl.  isMode 3   }
+{                      and 4 are the crew and weather pages.           }
+
+{ REV N  17-Oct-2026  1.0: the map page's spare line points to the crew   }
+{                      page (Browser start page, link 8).                }
+{ REV M  17-Oct-2026  RELEASE 1.0 (Tim): REV L with the version shown as  }
+{                      'LisaFuji 1.0'.  No other change.                   }
+{ REV L  17-Oct-2026  RELEASE 0.6: REV K (tested on the 2/10 with the     }
+{                      real FujiNet) with the version shown as plain      }
+{                      'LisaFuji 0.6'.  No other change.                   }
+{ REV K  17-Oct-2026  The space station on a world map.  isNote.  NOT    }
+{                      yet compiled on a Lisa.                           }
+{ REV J  16-Oct-2026  LisaFuji 0.6: the Space menu (menu 4: where the  }
+{                      space station is, set your town); Test, Speed,   }
+{                      Help and Version move to 5 to 8.  isMode and     }
+{                      nwSplit; nwMax 24.  NOT yet compiled on a Lisa.  }
+{ REV E  14-Oct-2026  LisaFuji 0.5: C sets the Lisa's clock from the    }
+{                      FujiNet's network time, the twin-year way, with  }
+{                      LisaTwinClock's unit (LFJ/TWUNIT).  Test menu    }
+{                      item 9.  NOT yet compiled on a Lisa.             }
+{ REV D  14-Oct-2026  LisaFuji 0.4: adds the Wiki menu (search and     }
+{                      read Wikipedia through fujinet.online/8bitwiki)  }
+{                      and its state.  Menus renumbered: Wiki is menu   }
+{                      3; Test, Speed, Help, Version move to 4 to 7.    }
+{                      NwGet folds accented letters to plain ones.      }
+{ REV C  13-Oct-2026  Version 0.3 REV C: real-clock timeouts (FnBus).  }
+{                      No change here but the version string.         }
+{ REV B  12-Oct-2026  LisaFuji 0.2: adds the News menu and the news     }
+{                      reader state (categories, headlines, article     }
+{                      pages from fujinet.online/8bitnews).  Menus      }
+{                      renumbered: News is now menu 2.  NOT yet         }
+{                      compiled on a Lisa.                               }
+{ REV A  10-Oct-2026  First increment of LisaFuji (tool 419312 --        }
+{                      number PENCILLED IN, not yet reserved on the     }
+{                      LisaList2 list).  Shared state and the Filer     }
+{                      handshake, cloned from TWC-GLOBALS REV A, which  }
+{                      is LFU-GLOBALS REV I (LisaFileMover 1.1, proven  }
+{                      on the 2/10).  NOT yet compiled on a Lisa.       }
+
+{ LFJ-GLOBALS.TEXT -- LisaFuji.                                          }
+{ Talks to an RS-232 FujiNet on Serial B.  This first build is the      }
+{ TEST TOOL: it proves the link one layer at a time (FujiNet ready,     }
+{ adapter and WiFi, network clock, then a small web file).  All of the  }
+{ serial and FujiBus work is in LFJ-FNBUS (unit FnBus).  This unit is   }
+{ state only.                                                            }
+
+INTERFACE
+
+uses    UnitStd,
+         UnitHz,
+        Storage,
+      QuickDraw,
+        FontMgr,
+        LSysCall,
+      Events,
+      Folders,
+       Menus,
+       AlertMgr,
+         WMLstd,
+         WMLCrs,
+      FilerComm;
+
+const
+   lfjVersion = 'LisaFuji 1.1';
+
+   winW = 600;                { the status window (LisaFileMover's size) }
+   winH = 300;
+   maxLines = 18;             { status lines kept and drawn }
+   lineHt   = 16;
+   urlCap   = 120;            { characters typed at the address prompt }
+   capMax   = 6;              { first lines of a fetched file kept for show }
+   idleMax  = 15000;          { ms a fetch waits with nothing arriving }
+   defUrl   = 'N1:HTTP://example.com/';   { offered at the first fetch }
+
+   { The news service.  HTTPS: the plain HTTP address only answers 301.  }
+   { t=lf: every line ends in LF.  ps=76x14: article text comes wrapped  }
+   { to 76 columns, 14 lines a page, which fills the pane under a        }
+   { three-line heading with the help line at the bottom.  l=9: nine     }
+   { headlines a page, one key each.                                      }
+   nwBase   = 'N1:HTTPS://fujinet.online/8bitnews/news.php?t=lf&ps=76x14';
+   nwPer    = 9;              { headlines on a page }
+   nwBody   = 14;             { article lines on a page }
+   nwMax    = 24;             { lines kept from one reply (REV J: 24, four towns of six fields) }
+   nwWide   = 160;            { characters kept from one reply line }
+
+   { The Wikipedia service, same shape as the news: t=lf, 76x14 pages. }
+   { s= searches (l=9: nine titles), a=&p=&h=1 reads an article page  }
+   { with the title on line 1 and Pg:n/N on line 2.                     }
+   wkBase   = 'N1:HTTPS://fujinet.online/8bitwiki/wiki.php?t=lf&ps=76x14';
+   wkLisa   = 77118;          { the Apple Lisa article, for the menu }
+   wkQCap   = 40;             { characters typed at the search prompt }
+
+   { The space station (REV J).  Both answer JSON; NwGet splits it at the }
+   { commas (nwSplit) so each field is a line, and keeps only the fields  }
+   { LfjIss wants.  The town search asks for four places with the name.   }
+   isUrl    = 'N1:HTTPS://api.wheretheiss.at/v1/satellites/25544';
+   isGeo    = 'N1:HTTPS://geocoding-api.open-meteo.com/v1/search?count=4';
+   isGeoQ   = '&language=en&format=json&name=';
+   isTCap   = 40;             { characters typed at the town prompt }
+
+   { Who is aboard (REV O): the community list; open-notify is stale.  }
+   crUrlA   = 'N1:HTTPS://corquaid.github.io/international-space-station-APIs';
+   crUrlB   = '/JSON/people-in-space.json';
+
+   { Menus.  A '-' separator COUNTS as an item position.                 }
+   mFile = 1;                 { "File/Print" }
+      miAsideAll = 1;
+      miAside    = 2;
+      { 3 is a separator }
+      miPutAway  = 4;
+
+   mNews = 2;                 { "News": items 1 to 9 are the categories, }
+                              { in the order NwSlug gives them           }
+
+   mWiki = 3;                 { "Wiki" }
+      miWkFind = 1;           { Search Wikipedia .../S }
+      miWkLisa = 2;           { Apple Lisa }
+
+   mSpace = 4;                { "Space" (REV J) }
+      miIsShow = 1;           { Where Is the Space Station/I }
+      miIsTown = 2;           { Set Your Town ... }
+      miCrew   = 3;           { Who Is Aboard the Space Stations/P (REV O) }
+
+   mWthr = 5;                 { "Weather" (REV O) }
+      miWxShow = 1;           { The Weather in Your Town/O }
+      miWxTown = 2;           { Set Your Town ... }
+
+   mTest = 6;                 { "Test" }
+      miAll   = 1;            { Run Tests 1 to 3/A }
+      miFetch = 2;            { Fetch a Web File .../F }
+      { 3 is a separator }
+      miT1    = 4;            { Test 1 FujiNet Ready }
+      miT2    = 5;            { Test 2 Adapter and WiFi }
+      miT3    = 6;            { Test 3 Network Clock }
+      { 7 is a separator }
+      miBytes = 8;            { Show Last Bytes/B }
+      miClock = 9;            { Set the Lisa Clock from the Network .../C }
+
+   mSpeed = 7;                { "Speed" }
+      mi9600  = 1;            { Use 9600 baud }
+      mi19200 = 2;            { Use 19200 baud }
+
+   mHelp = 8;                 { "Help" }
+      miHelpUse  = 1;         { How to Use/H }
+      miHelpWire = 2;         { Wiring and Set-up/W }
+
+   mVer = 9;                  { "Version" }
+      miAbout = 1;
+
+   lastBarMenu = 9;
+   lastMenu    = 9;
+
+   alertVerNum = 1;
+   alrtAbou   = 11;           { the About box }
+
+   { Heap: only the alert cache lives here.  4,000 integers = 8,000 bytes. }
+   maxHeap = 4000;
+
+type
+   StatStr = string[80];
+   UrlStr  = string[120];
+   NewsStr = string[160];     { one line of a news reply }
+
+var
+   theEvent  : EventRecord;
+   myWindow  : WindowPtr;
+   toldToDie : boolean;
+   initing   : boolean;
+   myMenus   : array [1..lastMenu] of MenuInfo;
+   allAlerts : TAlertFile;
+   myZone    : array [0..maxHeap] of integer;
+
+   { the status pane: a short list of lines }
+   statLine  : array [1..maxLines] of StatStr;
+   statCnt   : integer;
+   quiet     : boolean;       { TRUE while a page is being built; AddLine }
+                              { then skips the repaint }
+
+   myVol     : E_Name;        { the device this tool lives on, e.g. -#12- }
+
+   { the typed address prompt on the last status line }
+   promptOn  : boolean;
+   promptTxt : UrlStr;        { characters typed so far }
+   promptLbl : StatStr;       { the label drawn before them }
+
+   curUrl    : UrlStr;        { the address the next fetch uses }
+   curBaud   : longint;       { line speed; 9600 at launch }
+   cancelled : boolean;       { a key or click stopped the fetch }
+
+   { first lines of the last fetched file }
+   capLine   : array [1..capMax] of StatStr;
+   capCnt    : integer;
+
+   { the news reader.  nwMode: 0 = not in the news, 1 = category list,  }
+   { 2 = headlines, 3 = an article, 4 = a fetch failed.                  }
+   nwMode    : integer;
+   nwLine    : array [1..nwMax] of NewsStr;   { the last reply, by line }
+   nwCnt     : integer;
+   nwCat     : integer;       { category of the headlines shown, 1 to 9 }
+   nwPage    : integer;       { headline page shown, and how many there }
+   nwPgs     : integer;       { are }
+   nwHCnt    : integer;       { headlines on it, 0 to 9 }
+   nwId      : array [1..nwPer] of longint;   { their article numbers }
+   nwHRow    : array [1..nwPer] of StatStr;   { and their lines, ready }
+   nwHTop    : StatStr;       { the heading line of that page }
+   nwArtId   : longint;       { article shown, its page and page count }
+   nwAPage   : integer;
+   nwAPgs    : integer;
+   nwRqK     : integer;       { the last request, for R after a failure: }
+   nwRqC     : integer;       { 2 = headlines (nwRqC, nwRqP), 3 = an     }
+   nwRqA     : longint;       { article (nwRqA, nwRqP)                   }
+   nwRqP     : integer;
+
+   { shared by the news and Wikipedia fetches (NwGet) }
+   svcName   : string[20];    { 'the news service' or 'Wikipedia' }
+   svcEmpty  : boolean;       { the last reply had no lines at all }
+
+   { Wikipedia.  wkMode: 0 = not in it, 1 = the search prompt is up,  }
+   { 2 = the title list, 3 = an article, 4 = a fetch failed.           }
+   wkMode    : integer;
+   wkQ       : UrlStr;        { the last search words }
+   wkRCnt    : integer;       { titles found, 0 to 9 }
+   wkId      : array [1..nwPer] of longint;   { their article numbers }
+   wkRRow    : array [1..nwPer] of StatStr;   { and their lines, ready }
+   wkRTop    : StatStr;       { the heading line of the list }
+   wkArtId   : longint;       { article shown, its page and page count }
+   wkAPage   : integer;
+   wkAPgs    : integer;
+   wkRqK     : integer;       { the last request, for R after a failure: }
+   wkRqA     : longint;       { 2 = the search (wkQ), 3 = an article     }
+   wkRqP     : integer;       { (wkRqA, wkRqP)                           }
+
+   { the space station (REV J).  isMode: 0 = not in it, 1 = the town  }
+   { prompt is up, 2 = the station page (or a failed fetch) is shown.    }
+   isMode    : integer;
+   isNote    : StatStr;       { a note for the line above the keys, once (REV K) }
+   nwSplit   : boolean;       { NwGet: a comma ends a line too, and only }
+                              { the fields LfjIss keeps are kept         }
+
+   { the network clock.  ckMode: 1 = the time is shown, Y will set it. }
+   ckMode    : integer;
+   ckY       : integer;       { the network time, real year }
+   ckMo      : integer;
+   ckD       : integer;
+   ckH       : integer;
+   ckMi      : integer;
+   ckTwin    : integer;       { the twin year and the day of it }
+   ckDoy     : integer;
+
+procedure HandleFilerOp (var wantsOpen : boolean);
+
+
+IMPLEMENTATION
+
+procedure HandleFilerOp (var wantsOpen : boolean);
+var fx  : FilerExt;
+    err : integer;
+begin
+   wantsOpen := false;
+   GetAddParms(err, theEvent, fx);
+
+   case fx.theFlrOp of
+
+      fcNone :
+         wantsOpen := true;              { the user opened the tool }
+
+      fcResume :
+         TellFiler(err, docClosd, internalError, theEvent.who);
+
+      fcClose, fcSuspend, fcShred :
+         begin
+            myWindow := nil;
+            TellFiler(err, docClosd, allOK, theEvent.who)
+         end;
+
+      fcCopy, fcPut :
+         TellFiler(err, docNotXfered, internalError, theEvent.who);
+
+      fcDfClose :
+         TellFiler(err, dfClosed, allOK, theEvent.who);
+
+      fcTerminate :
+         toldToDie := true;
+
+      otherwise
+
+   end
+end;
+
+end.

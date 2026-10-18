@@ -1,0 +1,915 @@
+unit FnBus;
+
+{ REV C  13-Oct-2026  Waits end by the real clock.  On the FPGA each    }
+{                      50 ms nap really took about 150 ms, so every     }
+{                      timeout ran three times long (15 s, not 5).      }
+{                      FnTStart / FnTOver time a wait with GET_TIME     }
+{                      (whole seconds); if the clock is unset they fall }
+{                      back to counting naps, as REV A did.  FnRecv     }
+{                      uses them; LisaFuji's idle waits do too.         }
+{                      NOT yet compiled on a Lisa.                       }
+{ REV A  10-Oct-2026  First version: Serial B set-up, FujiBus framing,  }
+{                      checksum, timed replies, and the calls a first   }
+{                      Lisa client needs (ready, adapter, WiFi, clock,  }
+{                      network unit N1).  NOT yet compiled on a Lisa.   }
+
+{ LFJ-FNBUS.TEXT -- the FujiNet engine for LisaFuji (tool 419312).       }
+{ Nothing here touches menus, windows or alerts.  Callers get a result  }
+{ code back and do the talking.  Written to be linked by any tool that  }
+{ wants the FujiNet (the Installer, later tools).                       }
+{                                                                        }
+{ THE WIRE.  FujiBus, as spoken by RS-232 FujiNet firmware 1.6.0:       }
+{   frame   C0  packet  C0     inside, C0 goes as DB DC, DB as DB DD    }
+{   packet  device, command, length low, length high, checksum,         }
+{           descriptor, parameters, payload                              }
+{ The length counts the whole packet.  The Lisa always speaks first;    }
+{ each request gets exactly one reply whose command byte is 06 (ACK)    }
+{ or 15 hex (NAK).                                                       }
+{                                                                        }
+{ BYTE ORDER.  The 68000 keeps the high byte first; this wire wants the }
+{ low byte first.  Every 16-bit value is put on and taken off one byte  }
+{ at a time.  No integer is ever moved in or out whole.                 }
+{                                                                        }
+{ RULES BUILT IN, so no caller can get them wrong:                       }
+{   * every command sends exactly the parameters the firmware reads     }
+{     (a missing one restarts the FujiNet);                              }
+{   * stale input is thrown away before each command;                    }
+{   * FnNRead refuses more than 256 bytes, more than the last STATUS    }
+{     said is waiting, and any read of a unit that is not open;          }
+{   * FnNOpen always follows with STATUS (an OPEN is answered ACK even  }
+{     for a missing file or a dead server);                              }
+{   * a network READ or WRITE is never repeated.                         }
+{                                                                        }
+{ TIMEOUTS ARE REAL TIME.  LISACom counted loop turns, which ran short  }
+{ on the accelerated FPGA and long on a stock Lisa.  Here the wait is   }
+{ "ask the driver how many bytes it holds; none: sleep fnTick           }
+{ milliseconds with DELAY_TIME", and since REV C the wait ends by the   }
+{ clock (FnTOver): REV A counted the naps, and on the FPGA each nap     }
+{ took three times as long as asked.                                     }
+{                                                                        }
+{ EVERY ROUTINE IS IN THE INTERFACE, with its parameters repeated as a  }
+{ comment in the implementation: the one unit layout already proven on  }
+{ the Lisa (LFU-UNIT).  FnDCp and FnDSz are helpers, not for callers.   }
+{                                                                        }
+{ PORT CODE.  FnPortUp is LISACom 1.7's PortUp, call for call (MOUNT,   }
+{ the DEVICE_CONTROL set-up block, typeahead 1024/341/683, OPEN),       }
+{ proven on the 2/10.  Received bytes are taken in pieces of at most    }
+{ 128, the size LISACom's terminal uses.                                 }
+
+INTERFACE
+
+uses (*$U UnitStd.obj *)   UnitStd,
+     (*$U UnitHz.obj *)    UnitHz,
+     (*$U Storage.obj *)   Storage,
+     (*$U QuickDraw.obj *) QuickDraw,
+     (*$U SysCall.obj *)   SysCall;
+
+const
+   { result codes }
+   fnOK     = 0;              { reply arrived and it was ACK }
+   fnNakd   = 1;              { reply arrived and it was NAK }
+   fnNoRep  = 2;              { nothing came back in time }
+   fnBadFr  = 3;              { a frame came back damaged }
+   fnPortEr = 4;              { the serial port refused a call }
+   fnBadArg = 5;              { the caller asked for something not allowed }
+   fnShort  = 6;              { ACK, but not the data that was expected }
+   fnStall  = 7;              { a reply started and stopped part-way }
+
+   fnAck    = 6;              { reply command bytes }
+   fnNak    = 21;
+
+   { devices }
+   fnDFuji  = 112;            { 70 hex: FujiNet control }
+   fnDN1    = 113;            { 71 hex: network unit N1 }
+   fnDClock = 69;             { 45 hex: clock }
+
+   { times, in milliseconds }
+   fnTick   = 50;             { one sleep while waiting }
+   fnTmo    = 5000;           { wait for the first byte of a reply }
+   fnTmoOp  = 25000;          { the same, for OPEN: outlast the board's own 15 s HTTP wait (REV G) }
+   fnGap    = 2000;           { longest silence allowed inside a reply }
+
+   fnGrab   = 128;            { most bytes taken from the driver at once }
+   fnRdMax  = 256;            { most bytes asked for in one network READ }
+   fnPktMax = 600;            { room for a packet (largest reply is 518) }
+   fnWirMax = 540;            { room for an escaped frame going out }
+   fnOutMax = 256;            { payload bytes a caller can send }
+   fnTxMax  = 24;             { bytes of the last frame sent kept for show }
+
+type
+   FnByte = -128..127;
+
+var
+   fnPkt    : array [0..599] of FnByte; { the last packet, not escaped }
+   fnWire   : array [0..539] of FnByte; { frame going out; bytes coming in }
+   fnOut    : array [0..255] of FnByte; { payload for the next command }
+   fnTx     : array [0..23] of FnByte;  { start of the last frame sent }
+   fnTxLen  : integer;        { full length of the last frame sent }
+
+   fnLen    : integer;        { bytes in the last reply packet }
+   fnOff    : integer;        { where its data starts in fnPkt }
+   fnPlLen  : integer;        { how many data bytes it carries }
+   fnRDev   : integer;        { its device byte }
+   fnRCmd   : integer;        { its command byte: fnAck or fnNak }
+
+   fnEcode  : integer;        { OS ecode of the last serial call }
+   fnMntEc  : integer;        { ecode MOUNT gave in FnPortUp }
+   fnUp     : boolean;        { the port is open }
+   fnRef    : integer;        { its refnum }
+   fnPnp    : Pathname;       { -RS232B }
+   fnCparm  : DcType;
+   fnCalls  : longint;        { commands sent since FnInit }
+
+   fnIsOpen : boolean;        { network unit N1 has been opened }
+   fnWait   : longint;        { bytes waiting, from the last STATUS }
+   fnStMs   : longint;        { wait for a STATUS reply: fnTmo, or fnTmoOp right after an OPEN }
+   fnConn   : integer;        { connected flag, from the last STATUS }
+   fnStat   : integer;        { status code, from the last STATUS }
+
+procedure FnInit;
+function  FnPortUp (baud : longint) : boolean;
+procedure FnPortDn;
+procedure FnDCp   (code : integer; d0, d1, d2 : longint);
+procedure FnFlush;
+procedure FnNap    (ms : integer);
+function  FnSecs   (var ok : boolean) : longint;
+procedure FnTStart (var t0 : longint; var clk : boolean);
+function  FnTOver  (t0 : longint; clk : boolean; waited, limit : longint) : boolean;
+function  FnGetB   (i : integer) : integer;
+procedure FnPutB   (i, v : integer);
+function  FnChk    (n : integer) : integer;
+function  FnDSz    (d : integer) : integer;
+function  FnSend   (dev, cmd, desc, p0, p1, plLen : integer) : integer;
+function  FnRecv   (firstMs : longint) : integer;
+function  FnCall   (dev, cmd, desc, p0, p1, plLen : integer;
+                    firstMs : longint) : integer;
+function  FnReady  : integer;
+function  FnWifi   (var st : integer) : integer;
+function  FnAdCfg  : integer;
+function  FnPlB    (i : integer) : integer;
+procedure FnPlStr  (off, maxLen : integer; var s : Str255);
+function  FnClock  (var d, mo, y, h, mi, s : integer) : integer;
+function  FnNOpen  (var url : Str255; opMode, trans : integer) : integer;
+function  FnNStat  : integer;
+function  FnNRead  (cnt : integer) : integer;
+function  FnNWrit  (cnt : integer) : integer;
+function  FnNClos  : integer;
+procedure FnNum    (n : longint; var txt : Str255);
+procedure FnHex    (v : integer; var txt : Str255);
+
+
+IMPLEMENTATION
+
+{ LisaFuji REV E: this unit's code goes in its own segment.  LisaFuji's }
+{ code passed the 32K limit of one segment when the TwcUnit was added;  }
+{ the Lisa swaps segments in as they are called.                         }
+{$S LFJFnBus}
+
+{------------------------------------------------------------------------}
+{ Small helpers.                                                         }
+{------------------------------------------------------------------------}
+
+procedure FnInit;
+{ Call once at start-up, before anything else here. }
+begin
+   fnUp     := false;
+   fnRef    := 0;
+   fnEcode  := 0;
+   fnMntEc  := 0;
+   fnCalls  := 0;
+   fnTxLen  := 0;
+   fnLen    := 0;
+   fnOff    := 6;
+   fnPlLen  := 0;
+   fnRDev   := 0;
+   fnRCmd   := 0;
+   fnIsOpen := false;
+   fnWait   := 0;
+   fnStMs   := fnTmo;
+   fnConn   := 0;
+   fnStat   := 0;
+   fnPnp    := '-RS232B'
+end;
+
+function FnGetB {i : integer} : integer;
+{ Byte i of the packet as 0..255. }
+var b : integer;
+begin
+   b := fnPkt[i];
+   if b < 0 then b := b + 256;
+   FnGetB := b
+end;
+
+procedure FnPutB {i, v : integer};
+{ Store 0..255 as byte i of the packet. }
+begin
+   if v > 127 then v := v - 256;
+   fnPkt[i] := v
+end;
+
+procedure FnNum {n : longint; var txt : Str255};
+{ Decimal text of n.  Lisa Pascal has no string function results. }
+var tmp : string[1];
+    d   : integer;
+    neg : boolean;
+begin
+   neg := n < 0;
+   if neg then n := -n;
+   if n = 0 then
+      txt := '0'
+   else begin
+      txt := '';
+      while n > 0 do begin
+         d := n mod 10;
+         tmp := '0';
+         tmp[1] := chr(ord('0') + d);
+         txt := concat(tmp, txt);
+         n := n div 10
+      end
+   end;
+   if neg then txt := concat('-', txt)
+end;
+
+procedure FnHex {v : integer; var txt : Str255};
+{ Two hex digits of v (0..255). }
+var d : integer;
+begin
+   txt := '00';
+   d := (v div 16) mod 16;
+   if d < 10 then
+      txt[1] := chr(ord('0') + d)
+   else
+      txt[1] := chr(ord('A') + d - 10);
+   d := v mod 16;
+   if d < 10 then
+      txt[2] := chr(ord('0') + d)
+   else
+      txt[2] := chr(ord('A') + d - 10)
+end;
+
+procedure FnNap {ms : integer};
+{ Sleep ms milliseconds (OS DELAY_TIME; LISACom 1.7's Snooze). }
+var iv : timestmp_interval;
+    ct : time_rec;
+    e  : integer;
+begin
+   iv.sec := ms div 1000;
+   iv.msec := ms mod 1000;
+   ct.year := 0;
+   ct.day := 1;
+   ct.hour := 0;
+   ct.minute := 0;
+   ct.second := 0;
+   ct.msec := 0;
+   DELAY_TIME(e, iv, ct)
+end;
+
+{------------------------------------------------------------------------}
+{ Timing a wait by the real clock (REV C).                               }
+{ GET_TIME counts whole seconds (the OS sets msec to 0), so a wait of    }
+{ limit ms ends once more than limit div 1000 whole seconds have passed: }
+{ 5000 ends after 5 to 6 s, 2000 after 2 to 3 s, 15000 after 15 to 16 s. }
+{ If GET_TIME reports an error (a Lisa whose clock was never set) the    }
+{ wait counts naps instead, as REV A did.  As a guard against a clock    }
+{ that does not move, nap counting also ends a wait at four times its   }
+{ limit.  waited = 0 means nothing has been waited yet: no clock call.  }
+{------------------------------------------------------------------------}
+
+function FnSecs {var ok : boolean} : longint;
+{ Seconds into the year from GET_TIME.  ok is FALSE if the clock is not  }
+{ set.                                                                   }
+var tr : time_rec;
+    e  : integer;
+    s  : longint;
+begin
+   GET_TIME(e, tr);
+   ok := e = 0;
+   s := tr.day;
+   s := s * 24 + tr.hour;
+   s := s * 60 + tr.minute;
+   s := s * 60 + tr.second;
+   FnSecs := s
+end;
+
+procedure FnTStart {var t0 : longint; var clk : boolean};
+{ Note the start of a wait. }
+begin
+   t0 := FnSecs(clk)
+end;
+
+function FnTOver {t0 : longint; clk : boolean; waited, limit : longint}
+                 : boolean;
+{ TRUE when a wait that began at t0 has used up limit ms.  waited is the }
+{ ms the caller has napped since then.                                   }
+var now : longint;
+    el  : longint;
+    ok  : boolean;
+begin
+   FnTOver := false;
+   if waited <= 0 then
+      exit(FnTOver);
+   if clk then begin
+      now := FnSecs(ok);
+      if ok then begin
+         el := now - t0;
+         FnTOver := (el < 0) or (el > limit div 1000)
+                    or (waited >= 4 * limit);
+         exit(FnTOver)
+      end
+   end;
+   FnTOver := waited >= limit
+end;
+
+{------------------------------------------------------------------------}
+{ The port.  LISACom 1.7's PortUp / PortDn / FlushIn.                    }
+{------------------------------------------------------------------------}
+
+procedure FnDCp {code : integer; d0, d1, d2 : longint};
+{ One DEVICE_CONTROL call on Serial B (LISACom's DCp). }
+begin
+   fnCparm.dccode := code;
+   fnCparm.dcdata[0] := d0;
+   fnCparm.dcdata[1] := d1;
+   fnCparm.dcdata[2] := d2;
+   DEVICE_CONTROL(fnEcode, fnPnp, fnCparm)
+end;
+
+procedure FnFlush;
+{ Throw away anything the driver is holding. }
+begin
+   if fnUp then
+      FnDCp(9, -1, -2, -2)
+end;
+
+function FnPortUp {baud : longint} : boolean;
+{ MOUNT (1052 = already mounted = fine), set up, open.  8 bits, no      }
+{ parity, no handshake.  FALSE: fnEcode holds the OPEN ecode and        }
+{ fnMntEc what MOUNT said (1051 or 946 = Serial B is not set to Serial  }
+{ Cable in Preferences).                                                 }
+var vol : E_Name;
+    pw  : E_Name;
+    dev : E_Name;
+begin
+   if fnUp then begin
+      FnPortUp := true;
+      exit(FnPortUp)
+   end;
+   FnPortUp := false;
+   vol := '';
+   pw  := '';
+   dev := 'RS232B';
+   MOUNT(fnMntEc, vol, pw, dev);
+   fnPnp := '-RS232B';
+   fnCparm.dcversion := 2;
+   FnDCp( 1, 0, 0, 0);
+   FnDCp( 5, baud, 0, 0);
+   FnDCp( 6, 1, 0, 0);
+   FnDCp( 7, 0, 0, 0);
+   FnDCp( 9, -1, -1, 32767);
+   FnDCp( 9, 1024, 341, 683);
+   FnDCp(10, 0, 0, 0);
+   FnDCp(14, 0, 0, 0);
+   FnDCp(25, 0, 0, 0);
+   FnDCp(11, 0, 0, 0);
+   FnDCp(12, 0, 0, 0);
+   FnDCp(17, 0, 0, 0);
+   fnPnp := '-RS232B-XYZ';
+   OPEN(fnEcode, fnPnp, fnRef, [DRead, DWrite]);
+   fnPnp := '-RS232B';
+   if fnEcode <= 0 then begin
+      fnUp := true;
+      fnIsOpen := false;
+      fnWait := 0;
+      FnPortUp := true
+   end
+end;
+
+procedure FnPortDn;
+var e : integer;
+begin
+   if fnUp then begin
+      CLOSE_OBJECT(e, fnRef);
+      fnUp := false
+   end
+end;
+
+{------------------------------------------------------------------------}
+{ Packets and frames.                                                    }
+{------------------------------------------------------------------------}
+
+function FnChk {n : integer} : integer;
+{ FujiBus checksum over the first n packet bytes: add each byte, fold   }
+{ the carry back in.  The caller zeroes the checksum byte (4) first.    }
+var c, i, b : integer;
+begin
+   c := 0;
+   for i := 0 to n - 1 do begin
+      b := fnPkt[i];
+      if b < 0 then b := b + 256;
+      c := c + b;
+      c := (c div 256) + (c mod 256)
+   end;
+   FnChk := c mod 256
+end;
+
+function FnDSz {d : integer} : integer;
+{ Parameter bytes announced by one descriptor byte. }
+var k : integer;
+begin
+   k := d mod 8;
+   if k <= 4 then
+      FnDSz := k
+   else if k = 5 then
+      FnDSz := 2
+   else
+      FnDSz := 4
+end;
+
+function FnSend {dev, cmd, desc, p0, p1, plLen : integer} : integer;
+{ Build one packet and send it as one frame, in one WRITE_DATA.          }
+{ desc says which parameters go with it:                                  }
+{    0  none        1  p0 as one byte        2  p0 and p1, one byte each  }
+{    5  p0 as one 16-bit value, low byte first                            }
+{ plLen bytes of payload are taken from fnOut.                            }
+var n, i, w, b : integer;
+    wrote      : longint;
+begin
+   FnSend := fnBadArg;
+   if (plLen < 0) or (plLen > fnOutMax) then
+      exit(FnSend);
+   if (desc <> 0) and (desc <> 1) and (desc <> 2) and (desc <> 5) then
+      exit(FnSend);
+   if (p0 < 0) or (p1 < 0) then
+      exit(FnSend);
+   if not fnUp then begin
+      FnSend := fnPortEr;
+      exit(FnSend)
+   end;
+
+   FnPutB(0, dev);
+   FnPutB(1, cmd);
+   FnPutB(4, 0);
+   FnPutB(5, desc);
+   n := 6;
+   if desc = 1 then begin
+      FnPutB(6, p0 mod 256);
+      n := 7
+   end
+   else if desc = 2 then begin
+      FnPutB(6, p0 mod 256);
+      FnPutB(7, p1 mod 256);
+      n := 8
+   end
+   else if desc = 5 then begin
+      FnPutB(6, p0 mod 256);
+      FnPutB(7, p0 div 256);
+      n := 8
+   end;
+   for i := 0 to plLen - 1 do
+      fnPkt[n + i] := fnOut[i];
+   n := n + plLen;
+   FnPutB(2, n mod 256);
+   FnPutB(3, n div 256);
+   FnPutB(4, FnChk(n));
+
+   { escape into the frame: C0 -> DB DC, DB -> DB DD }
+   fnWire[0] := -64;                    { C0 }
+   w := 1;
+   for i := 0 to n - 1 do begin
+      b := fnPkt[i];
+      if b = -64 then begin             { C0 }
+         fnWire[w] := -37;              { DB }
+         fnWire[w + 1] := -36;          { DC }
+         w := w + 2
+      end
+      else if b = -37 then begin        { DB }
+         fnWire[w] := -37;              { DB }
+         fnWire[w + 1] := -35;          { DD }
+         w := w + 2
+      end
+      else begin
+         fnWire[w] := b;
+         w := w + 1
+      end
+   end;
+   fnWire[w] := -64;                    { C0 }
+   w := w + 1;
+
+   fnTxLen := w;
+   for i := 0 to fnTxMax - 1 do
+      if i < w then
+         fnTx[i] := fnWire[i]
+      else
+         fnTx[i] := 0;
+
+   wrote := 0;
+   WRITE_DATA(fnEcode, fnRef, ord4(@fnWire), w, wrote, sequential, 0);
+   if (fnEcode > 0) or (wrote <> w) then
+      FnSend := fnPortEr
+   else
+      FnSend := fnOK
+end;
+
+function FnRecv {firstMs : longint} : integer;
+{ Read one frame into fnPkt, un-escaped, and check it.  Waits firstMs   }
+{ for the first byte, then no more than fnGap between pieces.  Bytes    }
+{ before the opening C0 are ignored (REV F: and so is any C0 that does  }
+{ not close a whole packet).  On fnOK: fnLen, fnOff, fnPlLen,   }
+{ fnRDev and fnRCmd describe the reply.                                  }
+var waited : longint;
+    limit  : longint;
+    t0     : longint;
+    clk    : boolean;
+    avail  : longint;
+    actual : longint;
+    grab   : integer;
+    i, b   : integer;
+    n      : integer;
+    len    : integer;
+    chk    : integer;
+    d      : integer;
+    off    : integer;
+    par    : integer;
+    inFr   : boolean;
+    esc    : boolean;
+    done   : boolean;
+    over   : boolean;
+    dead   : boolean;
+    more   : boolean;
+begin
+   fnLen   := 0;
+   fnOff   := 6;
+   fnPlLen := 0;
+   fnRDev  := 0;
+   fnRCmd  := 0;
+   FnRecv  := fnPortEr;
+   if not fnUp then
+      exit(FnRecv);
+
+   n := 0;
+   inFr := false;
+   esc  := false;
+   done := false;
+   over := false;
+   dead := false;
+   waited := 0;
+   limit := firstMs;
+   FnTStart(t0, clk);
+
+   while (not done) and (not dead)
+         and (not FnTOver(t0, clk, waited, limit)) do begin
+      fnCparm.dccode := 19;
+      DEVICE_CONTROL(fnEcode, fnPnp, fnCparm);
+      avail := 0;
+      if fnEcode = 0 then
+         avail := fnCparm.dcdata[9]
+      else
+         dead := true;
+      if avail > 0 then begin
+         grab := fnGrab;
+         if avail < grab then
+            grab := avail;
+         actual := 0;
+         READ_DATA(fnEcode, fnRef, ord4(@fnWire), grab, actual,
+                   sequential, 0);
+         if actual <= 0 then
+            dead := true
+         else begin
+            i := 0;
+            while (i < actual) and (not done) do begin
+               b := fnWire[i];
+               if b < 0 then b := b + 256;
+               if b = 192 then begin               { C0: frame mark }
+                  if inFr and (n >= 6) then
+                     done := true
+                  else begin
+                     { REV F: a C0 after fewer bytes than any packet   }
+                     { has opens a new frame instead of ending one.    }
+                     { Stray bytes left on the line (a cable plugged   }
+                     { back in) used to pass for a frame, and the real }
+                     { reply behind them was lost.                     }
+                     inFr := true;
+                     esc := false;
+                     n := 0
+                  end
+               end
+               else if inFr then begin
+                  if esc then begin
+                     esc := false;
+                     if b = 220 then               { DC }
+                        b := 192
+                     else if b = 221 then          { DD }
+                        b := 219
+                  end
+                  else if b = 219 then             { DB: escape }
+                     esc := true;
+                  if not esc then begin
+                     if n < fnPktMax then begin
+                        FnPutB(n, b);
+                        n := n + 1
+                     end
+                     else
+                        over := true
+                  end
+               end;
+               i := i + 1
+            end;
+            waited := 0;
+            limit := fnGap;
+            FnTStart(t0, clk)
+         end
+      end
+      else if not dead then begin
+         FnNap(fnTick);
+         waited := waited + fnTick
+      end
+   end;
+
+   fnLen := n;
+   if dead then
+      exit(FnRecv);
+   if not done then begin
+      if inFr then
+         FnRecv := fnStall
+      else
+         FnRecv := fnNoRep;
+      exit(FnRecv)
+   end;
+
+   { a whole frame: length, checksum, then find the data }
+   FnRecv := fnBadFr;
+   if over or (n < 6) then
+      exit(FnRecv);
+   if FnGetB(3) > 2 then                { no packet is that long }
+      exit(FnRecv);
+   len := FnGetB(2) + 256 * FnGetB(3);
+   if len <> n then
+      exit(FnRecv);
+   chk := FnGetB(4);
+   FnPutB(4, 0);
+   if FnChk(n) <> chk then begin
+      FnPutB(4, chk);
+      exit(FnRecv)
+   end;
+   FnPutB(4, chk);
+
+   d := FnGetB(5);
+   off := 6;
+   par := FnDSz(d);
+   more := d >= 128;
+   while more and (off < n) do begin
+      d := FnGetB(off);
+      off := off + 1;
+      par := par + FnDSz(d);
+      more := d >= 128
+   end;
+   off := off + par;
+   if off > n then
+      exit(FnRecv);
+
+   fnRDev  := FnGetB(0);
+   fnRCmd  := FnGetB(1);
+   fnOff   := off;
+   fnPlLen := n - off;
+   FnRecv  := fnOK
+end;
+
+function FnCall {dev, cmd, desc, p0, p1, plLen : integer;
+                 firstMs : longint} : integer;
+{ One request, one reply.  fnOK = ACK, fnNakd = NAK. }
+var rc : integer;
+begin
+   FnFlush;
+   rc := FnSend(dev, cmd, desc, p0, p1, plLen);
+   if rc = fnOK then begin
+      fnCalls := fnCalls + 1;
+      rc := FnRecv(firstMs);
+      if rc = fnOK then begin
+         if fnRCmd = fnNak then
+            rc := fnNakd
+         else if fnRCmd <> fnAck then
+            rc := fnBadFr
+      end
+   end;
+   FnCall := rc
+end;
+
+{------------------------------------------------------------------------}
+{ Reply data.                                                            }
+{------------------------------------------------------------------------}
+
+function FnPlB {i : integer} : integer;
+{ Data byte i of the last reply as 0..255; -1 if there is no such byte. }
+begin
+   if (i < 0) or (i >= fnPlLen) then
+      FnPlB := -1
+   else
+      FnPlB := FnGetB(fnOff + i)
+end;
+
+procedure FnPlStr {off, maxLen : integer; var s : Str255};
+{ Text from the reply data starting at off: up to maxLen characters,    }
+{ ending at the first zero byte.  Bytes that will not print become '.'. }
+var i, b : integer;
+    tmp  : string[1];
+    stop : boolean;
+begin
+   s := '';
+   tmp := ' ';
+   i := 0;
+   stop := false;
+   while (i < maxLen) and (i < 255) and (not stop) do begin
+      b := FnPlB(off + i);
+      if b <= 0 then
+         stop := true
+      else begin
+         if (b < 32) or (b > 126) then b := ord('.');
+         tmp[1] := chr(b);
+         s := concat(s, tmp);
+         i := i + 1
+      end
+   end
+end;
+
+{------------------------------------------------------------------------}
+{ FujiNet control and clock.                                             }
+{------------------------------------------------------------------------}
+
+function FnReady : integer;
+{ Device-ready test: the FujiNet answers with 512 letter A's. }
+var rc, i : integer;
+begin
+   rc := FnCall(fnDFuji, 0, 0, 0, 0, 0, fnTmo);
+   if rc = fnOK then begin
+      if fnPlLen <> 512 then
+         rc := fnShort
+      else
+         for i := 0 to 511 do
+            if FnPlB(i) <> 65 then
+               rc := fnShort
+   end;
+   FnReady := rc
+end;
+
+function FnWifi {var st : integer} : integer;
+{ WiFi status byte: 3 = connected, 6 = disconnected. }
+var rc : integer;
+begin
+   st := 0;
+   rc := FnCall(fnDFuji, 250, 0, 0, 0, 0, fnTmo);       { FA }
+   if rc = fnOK then begin
+      if fnPlLen < 1 then
+         rc := fnShort
+      else
+         st := FnPlB(0)
+   end;
+   FnWifi := rc
+end;
+
+function FnAdCfg : integer;
+{ Adapter configuration, 140 bytes, left in the reply for FnPlStr and   }
+{ FnPlB: network name at 0 (33), host name at 33 (64), address at 97    }
+{ (4), gateway 101, mask 105, DNS 109, MAC 113 (6), BSSID 119 (6),      }
+{ firmware version at 125 (15).                                          }
+var rc : integer;
+begin
+   rc := FnCall(fnDFuji, 232, 0, 0, 0, 0, fnTmo);       { E8 }
+   if (rc = fnOK) and (fnPlLen < 140) then
+      rc := fnShort;
+   FnAdCfg := rc
+end;
+
+function FnClock {var d, mo, y, h, mi, s : integer} : integer;
+{ Network time in the zone set on the FujiNet's SD card.  y is the      }
+{ full year.  The clock commands take one parameter byte; 0 is sent.    }
+var rc : integer;
+begin
+   d := 0;
+   mo := 0;
+   y := 0;
+   h := 0;
+   mi := 0;
+   s := 0;
+   rc := FnCall(fnDClock, 147, 1, 0, 0, 0, fnTmo);      { 93 }
+   if rc = fnOK then begin
+      if fnPlLen < 6 then
+         rc := fnShort
+      else begin
+         d  := FnPlB(0);
+         mo := FnPlB(1);
+         y  := 2000 + FnPlB(2);
+         h  := FnPlB(3);
+         mi := FnPlB(4);
+         s  := FnPlB(5)
+      end
+   end;
+   FnClock := rc
+end;
+
+{------------------------------------------------------------------------}
+{ Network unit N1.                                                       }
+{------------------------------------------------------------------------}
+
+function FnNStat : integer;
+{ STATUS: fills fnWait, fnConn and fnStat.  Status 1 = good, 136 = end  }
+{ of data, 170 = not found, 207 = no connection.                         }
+var rc : integer;
+    lo : longint;
+    hi : longint;
+begin
+   rc := FnCall(fnDN1, 83, 0, 0, 0, 0, fnStMs);         { 53 }
+   if rc = fnOK then begin
+      if fnPlLen < 4 then
+         rc := fnShort
+      else begin
+         lo := FnPlB(0);
+         hi := FnPlB(1);
+         fnWait := lo + 256 * hi;
+         fnConn := FnPlB(2);
+         fnStat := FnPlB(3)
+      end
+   end;
+   FnNStat := rc
+end;
+
+function FnNOpen {var url : Str255; opMode, trans : integer} : integer;
+{ OPEN, then STATUS.  url is the whole device spec, for example         }
+{ N1:HTTP://host/path.  opMode 4 = read (HTTP GET), 8 = write, 12 =    }
+{ both.                                                                  }
+{ trans 0 = no line-end translation.  fnOK means both calls were        }
+{ answered; LOOK AT fnStat before reading: it must be 1.                 }
+var rc, i, n, b : integer;
+begin
+   fnIsOpen := false;
+   fnWait := 0;
+   fnConn := 0;
+   fnStat := 0;
+   n := length(url);
+   if (n < 1) or (n > fnOutMax - 1) then begin
+      FnNOpen := fnBadArg;
+      exit(FnNOpen)
+   end;
+   for i := 1 to n do begin
+      b := ord(url[i]);
+      if b > 127 then b := b - 256;
+      fnOut[i - 1] := b
+   end;
+   fnOut[n] := 0;
+   rc := FnCall(fnDN1, 79, 2, opMode, trans, n + 1, fnTmoOp);  { 4F }
+   if rc = fnOK then begin
+      fnIsOpen := true;
+      { the board does the HTTP GET when this first STATUS arrives, so its  }
+      { reply takes as long as the web server: give it the long wait        }
+      fnStMs := fnTmoOp;
+      rc := FnNStat;
+      fnStMs := fnTmo
+   end;
+   FnNOpen := rc
+end;
+
+function FnNRead {cnt : integer} : integer;
+{ READ cnt bytes; they arrive as the reply data (FnPlB, fnPlLen).       }
+{ Refused unless the unit is open and 1 <= cnt <= 256 and cnt is no     }
+{ more than the last STATUS said is waiting.  Never repeated.           }
+var rc : integer;
+begin
+   if (not fnIsOpen) or (cnt < 1) or (cnt > fnRdMax)
+      or (cnt > fnWait) then begin
+      FnNRead := fnBadArg;
+      exit(FnNRead)
+   end;
+   rc := FnCall(fnDN1, 82, 5, cnt, 0, 0, fnTmo);      { 52 }
+   if rc = fnOK then begin
+      if fnPlLen < 1 then
+         rc := fnShort
+      else begin
+         fnWait := fnWait - fnPlLen;
+         if fnWait < 0 then fnWait := 0
+      end
+   end;
+   FnNRead := rc
+end;
+
+function FnNWrit {cnt : integer} : integer;
+{ WRITE cnt bytes taken from fnOut.  Never repeated. }
+begin
+   if (not fnIsOpen) or (cnt < 1) or (cnt > fnOutMax) then
+      FnNWrit := fnBadArg
+   else
+      FnNWrit := FnCall(fnDN1, 87, 5, cnt, 0, cnt, fnTmo)  { 57 }
+end;
+
+function FnNClos : integer;
+{ CLOSE.  The FujiNet answers NAK after a failed transfer, so any       }
+{ reply at all counts as closed.                                         }
+var rc : integer;
+begin
+   rc := FnCall(fnDN1, 67, 0, 0, 0, 0, fnTmo);          { 43 }
+   if rc = fnNakd then
+      rc := fnOK;
+   fnIsOpen := false;
+   fnWait := 0;
+   FnNClos := rc
+end;
+
+end.

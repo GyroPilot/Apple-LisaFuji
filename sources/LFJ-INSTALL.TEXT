@@ -1,0 +1,30 @@
+$EXEC
+${ REV E  14-Oct-2026  LisaFuji 0.5 (network clock).  TWUNIT added.          }
+${ REV C  13-Oct-2026  LisaFuji 0.3 (real-clock timeouts).  Answers as REV B.}
+${ REV B  12-Oct-2026  LisaFuji 0.2 (News).  Answers unchanged from REV A.  }
+${ REV A  10-Oct-2026  First build: the InstallTool step alone.              }
+${==========================================================================}
+${ LFJ-INSTALL.TEXT -- register LisaFuji (tool 419312) with the Office     }
+${ System.  Run AFTER LFJ/MAKE:   R <LFJ/INSTALL                           }
+${                                                                          }
+${ InstallTool asks exactly six questions, and every answer -- the Y/N    }
+${ ones included -- must be followed directly by RETURN.  So each answer  }
+${ below sits alone on its line with NOTHING after it; the explanations   }
+${ are on these dollar-brace lines, which the exec drops entirely.  The    }
+${ device answer is the empty line (RETURN = PARAPORT).                   }
+${                                                                          }
+${   1  overwrite an existing tool with the same number?  Y               }
+${   2  device the tool is on  [PARAPORT]                  RETURN          }
+${   3  tool id number                                     419312          }
+${   4  does the tool create documents?                    N               }
+${   5  specify a different opening rectangle?             N               }
+${   6  name of the tool                                   LisaFuji        }
+${==========================================================================}
+R{un}InstallTool
+Y
+
+419312
+N
+N
+LisaFuji
+$ENDEXEC

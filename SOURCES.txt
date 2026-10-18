@@ -1,0 +1,18 @@
+LisaFuji 1.1 (REV P) -- what is here and how to build it
+
+sources/LFJ-MAIN.TEXT     the program: pages, keys, menus, the event loop; in three code segments
+sources/LFJ-GLOBALS.TEXT  unit LfjGlobals: constants, menu numbers, state, the Filer handshake
+sources/LFJ-FNBUS.TEXT    unit FnBus: Serial B and the FujiBus protocol (SLIP frames) to the FujiNet
+sources/LFJ-TWUNIT.TEXT   unit TwcUnit: the twin-year clock (shared with LisaTwinClock)
+sources/LFJ-MAP.TEXT      unit LfjMap: the world map as run-length rows (made by tools/make_map.py)
+sources/LFJ-ISS.TEXT      unit LfjIss: the space station page, your town, HOMETOWN.DATA (Lisa Pascal reals)
+sources/LFJ-MORE.TEXT     unit LfjMore: who is aboard, the weather page and its QuickDraw pictures
+sources/LFJ-ALERTS.TEXT   alerts and menus, Alert tool input
+sources/LFJ-COMP.TEXT     Workshop exec: the compiles
+sources/LFJ-LINK.TEXT     Workshop exec: the link (IOSFPLIB before IOSPASLIB, for the reals)
+sources/LFJ-MAKE.TEXT     Workshop exec: COMP, LINK, Filemgr copies of Obj and ICON, the Alert tool (tool 419312)
+sources/LFJ-INSTALL.TEXT  Workshop exec: InstallTool alone -- run after MAKE
+icon/LFJICONA.BIN         the tool icon (copy to the Lisa as LFJ/ICON.BIN)
+
+BUILD on the Lisa (Workshop 3.0): copy the sources as LFJ/MAIN.TEXT, LFJ/GLOBALS.TEXT ... and the icon as
+LFJ/ICON.BIN, then  R <LFJ/MAKE  and  R <LFJ/INSTALL.

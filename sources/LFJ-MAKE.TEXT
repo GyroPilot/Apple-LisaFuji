@@ -1,0 +1,33 @@
+$EXEC
+${ REV E  14-Oct-2026  LisaFuji 0.5 (network clock).  TWUNIT added.          }
+${ REV C  13-Oct-2026  LisaFuji 0.3 (real-clock timeouts).  Steps as REV B. }
+${ REV B  12-Oct-2026  LisaFuji 0.2 (News).  Steps unchanged from REV A.    }
+${ REV A  10-Oct-2026  First build.  Icon file LFJICONA.BIN -> LFJ/ICON.BIN. }
+${==========================================================================}
+${ LFJ-MAKE.TEXT -- build LisaFuji: compile, link, put the Obj and ICON    }
+${ files in place as tool 419312, compile the phrase file.  THEN run       }
+${ LFJ/INSTALL (R <LFJ/INSTALL).  Same two-exec recipe as PZL-MAKE REV C.  }
+${                                                                          }
+${ 419312 IS PENCILLED IN: next after 419311 (LisaFileMover) in Tim's      }
+${ series, not yet reserved on the LisaList2 tool-number list.  The number }
+${ appears only in this file (three Filemgr names and the Alert output     }
+${ name) and in LFJ/INSTALL.                                                }
+${                                                                          }
+${ LFJ/ICON.BIN must be on the disk before this runs.                      }
+${==========================================================================}
+$SUBMIT LFJ/COMP
+$SUBMIT LFJ/LINK
+${                                                                          }
+F{ilemgr}D{elete}~{T419312~}Obj
+Y{es}D{elete}~{T419312~}PHRASE
+Y{es}D{elete}~{T419312~}ICON
+Y{es}C{opy}LFJ/LFJ.OBJ
+~{T419312~}Obj
+C{opy}LFJ/ICON.BIN
+~{T419312~}ICON
+Q{uit}
+${                                                                          }
+R{un}Alert
+LFJ/ALERTS.TEXT
+~{T419312~}
+$ENDEXEC

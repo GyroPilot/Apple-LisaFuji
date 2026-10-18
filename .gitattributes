@@ -1,0 +1,3 @@
+*.TEXT text eol=crlf
+*.dc42 binary
+*.BIN binary

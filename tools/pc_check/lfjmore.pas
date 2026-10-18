@@ -1,0 +1,817 @@
+{$V+}
+unit LfjMore;
+
+{ REV P  17-Oct-2026  Weather icons (WxIcon, WxPaint): QuickDraw only.  }
+
+{ REV O  17-Oct-2026  LisaFuji 1.1: who is aboard the space stations    }
+{                      (P) and the weather in your town (O).  New unit. }
+{                      NOT yet compiled on a Lisa.                       }
+
+{ LFJ-MORE.TEXT -- two more pages for LisaFuji, made the way LfjIss     }
+{ makes the space station page: MAIN fetches the reply through the      }
+{ FujiNet (NwGet with the comma split on) and LfjIss's IsKeep hands     }
+{ every piece of it to this unit AS IT ARRIVES (CrLine, WxLine), so the }
+{ replies need none of NwGet's 24 lines.  CrEnd and WxEnd write the page }
+{ as lines of text in mrRow; MAIN shows them.  This unit never touches  }
+{ the screen or the port.                                                }
+{                                                                        }
+{ THE CREW.  https://corquaid.github.io/international-space-station-   }
+{ APIs/JSON/people-in-space.json (about 6 KB): number, iss_expedition,  }
+{ then people: id, name, country, agency, position, spacecraft,        }
+{ launched, iss (true or false), days_in_space, and links we skip.      }
+{ (api.open-notify.org still lists the 2024 crew: not used.)            }
+{                                                                        }
+{ THE WEATHER.  https://api.open-meteo.com/v1/forecast (no key): the    }
+{ current_weather block (temperature C, windspeed km/h, winddirection,  }
+{ weathercode, is_day, time) and three days of daily weathercode,       }
+{ temperature_2m_max, temperature_2m_min, precipitation_probability_max.}
+{ Arrays arrive one element a line after the comma split: the first    }
+{ with its key, the rest bare, so wxKey and wxIdx follow them.           }
+
+INTERFACE
+
+uses    UnitStd,
+         UnitHz,
+        Storage,
+      QuickDraw;
+
+const
+   mrRowMax = 32;             { lines of a page this unit writes }
+   crMax    = 16;             { people kept }
+   crPer    = 14;             { crew lines on one screen }
+
+type
+   MrRowStr = string[80];
+   MrNmStr  = string[32];
+   MrShStr  = string[24];
+
+var
+   mrRow   : array [1..mrRowMax] of MrRowStr;   { the page, ready to show }
+   mrRCnt  : integer;
+   mrSeen  : integer;         { pieces of the reply seen (IsKeep keeps the first) }
+   mrPage  : integer;         { crew screen shown, from 1 }
+   wxWant  : boolean;         { the town prompt was for the weather page }
+   wxWhy   : MrRowStr;        { open-meteo's own words when it refused }
+
+   { the crew, being read }
+   crN     : integer;
+   crNum   : integer;         { "number": people in space }
+   crExp   : integer;         { the ISS expedition }
+   crName  : array [1..crMax] of MrNmStr;
+   crPos   : array [1..crMax] of MrShStr;
+   crCraft : array [1..crMax] of MrShStr;
+   crCo    : array [1..crMax] of MrShStr;
+   crIss   : array [1..crMax] of boolean;
+   crDays  : array [1..crMax] of integer;
+
+   { the weather, being read }
+   wxSect  : integer;         { 0 other, 1 current_weather, 2 daily, 3 units }
+   wxKey   : MrNmStr;
+   wxIdx   : integer;
+   wxGot   : integer;         { 1 temperature, 2 code, 4 a day's high }
+   wxTemp  : longint;         { tenths of a degree C }
+   wxWind  : longint;         { tenths of a km/h }
+   wxDir   : longint;
+   wxCode  : longint;
+   wxIsDay : longint;
+   wxTime  : string[20];
+   wxDate  : array [1..3] of string[12];
+   wxDCode : array [1..3] of longint;
+   wxHi    : array [1..3] of longint;
+   wxLo    : array [1..3] of longint;
+   wxRain  : array [1..3] of longint;
+   wxOn    : boolean;         { the weather page is on screen: DrawShow paints its icons (REV P) }
+   icL, icT, icW, icH : integer;   { where the weather icon being drawn goes (REV P) }
+
+procedure MrInit;
+procedure CrBeg;
+procedure CrLine   (s : Str255);
+function  CrEnd    : boolean;
+procedure WxUrl    (lat, lon : longint; var url : Str255);
+procedure WxBeg;
+procedure WxLine   (s : Str255);
+function  WxEnd    : boolean;
+procedure WxPaint  (y0, lh : integer);
+
+
+IMPLEMENTATION
+
+{ Its own segment, as LfjIss and LfjMap. }
+{$S LFJMore}
+
+procedure MrInit;
+begin
+   mrRCnt := 0;
+   mrSeen := 0;
+   mrPage := 1;
+   wxWant := false;
+   wxWhy  := '';
+   crN    := 0;
+   wxGot  := 0;
+   wxOn   := false
+end;
+
+procedure MrPut (var s : Str255);
+{ One more line of the page, cut at 78 characters. }
+begin
+   if mrRCnt < mrRowMax then begin
+      mrRCnt := mrRCnt + 1;
+      if length(s) > 78 then
+         mrRow[mrRCnt] := copy(s, 1, 78)
+      else
+         mrRow[mrRCnt] := s
+   end
+end;
+
+procedure MrPad (var s : Str255; n : integer);
+{ s with spaces added to n characters. }
+begin
+   while length(s) < n do
+      s := concat(s, ' ')
+end;
+
+procedure MrNum (n : longint; var txt : Str255);
+{ Decimal text of n. }
+var one : string[1];
+    neg : boolean;
+begin
+   neg := n < 0;
+   if neg then n := -n;
+   txt := '';
+   one := ' ';
+   repeat
+      one[1] := chr(48 + (n mod 10));
+      txt := concat(one, txt);
+      n := n div 10
+   until n = 0;
+   if neg then txt := concat('-', txt)
+end;
+
+function MrVal (var v : Str255; tenths : boolean) : longint;
+{ The number at the start of v; tenths: times 10 (9.5 gives 95). }
+var i      : integer;
+    n      : longint;
+    neg    : boolean;
+    dot    : boolean;
+    dgt    : integer;
+    go     : boolean;
+begin
+   n := 0;
+   i := 1;
+   neg := false;
+   dot := false;
+   dgt := 0;
+   go := true;
+   if length(v) > 0 then
+      if v[1] = '-' then begin
+         neg := true;
+         i := 2
+      end;
+   while go and (i <= length(v)) do begin
+      if (v[i] >= '0') and (v[i] <= '9') then begin
+         if not dot then begin
+            if n < 20000000 then
+               n := n * 10 + (ord(v[i]) - 48)
+         end
+         else if tenths and (dgt = 0) then begin
+            n := n * 10 + (ord(v[i]) - 48);
+            dgt := 1
+         end
+      end
+      else if (v[i] = '.') and (not dot) then
+         dot := true
+      else
+         go := false;
+      i := i + 1
+   end;
+   if tenths and (dgt = 0) then
+      n := n * 10;
+   if neg then n := -n;
+   MrVal := n
+end;
+
+function MrRnd (t : longint) : longint;
+{ Tenths to the nearest whole number. }
+begin
+   if t >= 0 then
+      MrRnd := (t + 5) div 10
+   else
+      MrRnd := -((5 - t) div 10)
+end;
+
+procedure MrField (var s : Str255; var key, val : Str255);
+{ One piece of the comma split.  "key":value gives both (the LAST       }
+{ quote-colon on the line: the daily block's first piece gives time   }
+{ and 2026-10-17); a bare array element gives an empty key.  The value  }
+{ loses its quotes, braces and brackets.                                 }
+var p, q, i : integer;
+    one     : string[1];
+    c       : char;
+    start   : integer;
+begin
+   key := '';
+   val := '';
+   p := 0;
+   for i := 1 to length(s) - 1 do
+      if (s[i] = '"') and (s[i + 1] = ':') then
+         p := i;
+   start := 1;
+   if p > 1 then begin
+      q := p - 1;
+      while (q > 0) and (s[q] <> '"') do
+         q := q - 1;
+      if q > 0 then
+         key := copy(s, q + 1, p - q - 1);
+      start := p + 2
+   end;
+   one := ' ';
+   for i := start to length(s) do begin
+      c := s[i];
+      if (c <> '"') and (c <> '{') and (c <> '}') and (c <> '[') and (c <> ']') then
+         if (c <> ' ') or (length(val) > 0) then
+            if length(val) < 80 then begin
+               one[1] := c;
+               val := concat(val, one)
+            end
+   end;
+   while length(val) > 0 do
+      if val[length(val)] = ' ' then
+         val[0] := chr(length(val) - 1)
+      else
+         exit(MrField)
+end;
+
+{------------------------------------------------------------------------}
+{ The crew.                                                              }
+{------------------------------------------------------------------------}
+
+procedure CrBeg;
+begin
+   crN := 0;
+   crNum := 0;
+   crExp := 0;
+   mrSeen := 0;
+   mrRCnt := 0;
+   mrPage := 1
+end;
+
+procedure CrLine (s : Str255);
+var key, val : Str255;
+begin
+   mrSeen := mrSeen + 1;
+   MrField(s, key, val);
+   if key = 'id' then begin
+      if crN < crMax then begin
+         crN := crN + 1;
+         crName[crN] := '';
+         crPos[crN] := '';
+         crCraft[crN] := '';
+         crCo[crN] := '';
+         crIss[crN] := false;
+         crDays[crN] := -1
+      end
+   end
+   else if key = 'number' then
+      crNum := MrVal(val, false)
+   else if key = 'iss_expedition' then
+      crExp := MrVal(val, false)
+   else if crN > 0 then begin
+      if length(val) > 24 then
+         val[0] := chr(24);
+      if key = 'name' then
+         crName[crN] := val
+      else if key = 'position' then
+         crPos[crN] := val
+      else if key = 'spacecraft' then
+         crCraft[crN] := val
+      else if key = 'country' then
+         crCo[crN] := val
+      else if key = 'iss' then
+         crIss[crN] := (val = 'true')
+      else if key = 'days_in_space' then
+         crDays[crN] := MrVal(val, false)
+   end
+end;
+
+procedure CrWho (i : integer; craft : boolean);
+{ One person as one line of the page. }
+var s, t : Str255;
+begin
+   s := concat('  ', crName[i]);
+   if crPos[i] <> '' then
+      s := concat(s, concat(', ', crPos[i]));
+   t := crCo[i];                         { (the list's days_in_space is not }
+   if t = 'United States' then t := 'USA'  { this flight's: not shown)        }
+   else if t = 'United Kingdom' then t := 'UK';
+   if t <> '' then
+      s := concat(s, concat(' (', concat(t, ')')));
+   if craft and (crCraft[i] <> '') then
+      s := concat(s, concat('; came on ', crCraft[i]));
+   MrPut(s)
+end;
+
+function CrEnd : boolean;
+{ The page: how many, the ISS crew under its expedition, then everyone  }
+{ else under the craft that took them up (Shenzhou = China's Tiangong).  }
+var i, k, n : integer;
+    s, t    : Str255;
+    done    : array [1..crMax] of boolean;
+begin
+   CrEnd := false;
+   mrRCnt := 0;
+   if crN = 0 then
+      exit(CrEnd);
+   n := crNum;
+   if n < crN then n := crN;
+   MrNum(n, t);
+   s := concat(t, ' people are in space right now.');
+   MrPut(s);
+   n := 0;
+   for i := 1 to crN do
+      if crIss[i] then n := n + 1;
+   if n > 0 then begin
+      s := 'ON THE INTERNATIONAL SPACE STATION';
+      if crExp > 0 then begin
+         MrNum(crExp, t);
+         s := concat(s, concat(', EXPEDITION ', t))
+      end;
+      MrPut(s);
+      for i := 1 to crN do
+         if crIss[i] then CrWho(i, true)
+   end;
+   for i := 1 to crN do
+      done[i] := crIss[i];
+   for i := 1 to crN do
+      if not done[i] then begin
+         if pos('Shenzhou', crCraft[i]) = 1 then
+            s := concat('ON CHINA''S TIANGONG STATION (they came on ', concat(crCraft[i], ')'))
+         else if crCraft[i] = '' then
+            s := 'ON ANOTHER SPACECRAFT'
+         else
+            s := concat('ON ', crCraft[i]);
+         MrPut(s);
+         for k := i to crN do
+            if (not done[k]) and (crCraft[k] = crCraft[i]) then begin
+               CrWho(k, false);
+               done[k] := true
+            end
+      end;
+   s := 'From the people-in-space list at corquaid.github.io.';
+   MrPut(s);
+   CrEnd := true
+end;
+
+{------------------------------------------------------------------------}
+{ The weather.                                                           }
+{------------------------------------------------------------------------}
+
+procedure MrDeg (v : longint; var txt : Str255);
+{ Degrees times 10,000 as 39.1075 or -84.4958. }
+var w, f : Str255;
+    neg  : boolean;
+begin
+   neg := v < 0;
+   if neg then v := -v;
+   MrNum(v div 10000, w);
+   MrNum(v mod 10000 + 10000, f);        { 10000 + the fraction: keeps the zeros }
+   delete(f, 1, 1);
+   txt := concat(w, concat('.', f));
+   if neg then txt := concat('-', txt)
+end;
+
+procedure WxUrl (lat, lon : longint; var url : Str255);
+var a, b : Str255;
+begin
+   MrDeg(lat, a);
+   MrDeg(lon, b);
+   url := concat('N1:HTTPS://api.open-meteo.com/v1/forecast?latitude=', a);
+   url := concat(url, concat('&longitude=', b));
+   url := concat(url, '&current_weather=true&timezone=auto&forecast_days=3');
+   url := concat(url, '&daily=weathercode,temperature_2m_max,temperature_2m_min');
+   url := concat(url, ',precipitation_probability_max')
+end;
+
+procedure WxBeg;
+var i : integer;
+begin
+   wxSect := 0;
+   wxKey := '';
+   wxIdx := 0;
+   wxGot := 0;
+   wxWhy := '';
+   wxTime := '';
+   wxIsDay := 1;
+   mrSeen := 0;
+   mrRCnt := 0;
+   for i := 1 to 3 do begin
+      wxDate[i] := '';
+      wxDCode[i] := -1;
+      wxHi[i] := 0;
+      wxLo[i] := 0;
+      wxRain[i] := -1
+   end
+end;
+
+procedure WxLine (s : Str255);
+var key, val : Str255;
+    k        : MrNmStr;
+    i        : integer;
+begin
+   mrSeen := mrSeen + 1;
+   if pos('"current_weather":', s) > 0 then
+      wxSect := 1
+   else if pos('"daily":', s) > 0 then
+      wxSect := 2
+   else if pos('_units":', s) > 0 then
+      wxSect := 3;
+   MrField(s, key, val);
+   if key <> '' then begin
+      if length(key) > 32 then key[0] := chr(32);
+      wxKey := key;
+      wxIdx := 1
+   end
+   else
+      wxIdx := wxIdx + 1;
+   k := wxKey;
+   i := wxIdx;
+   if k = 'reason' then begin
+      if length(val) > 70 then val[0] := chr(70);
+      wxWhy := val
+   end
+   else if wxSect = 1 then begin
+      if k = 'temperature' then begin
+         wxTemp := MrVal(val, true);
+         wxGot := wxGot + 1
+      end
+      else if k = 'windspeed' then
+         wxWind := MrVal(val, true)
+      else if k = 'winddirection' then
+         wxDir := MrVal(val, false)
+      else if k = 'weathercode' then begin
+         wxCode := MrVal(val, false);
+         wxGot := wxGot + 2
+      end
+      else if k = 'is_day' then
+         wxIsDay := MrVal(val, false)
+      else if k = 'time' then begin
+         if length(val) > 20 then val[0] := chr(20);
+         wxTime := val
+      end
+   end
+   else if (wxSect = 2) and (i >= 1) and (i <= 3) then begin
+      if k = 'time' then begin
+         if length(val) > 12 then val[0] := chr(12);
+         wxDate[i] := val
+      end
+      else if k = 'weathercode' then
+         wxDCode[i] := MrVal(val, false)
+      else if k = 'temperature_2m_max' then begin
+         wxHi[i] := MrVal(val, true);
+         if i = 1 then wxGot := wxGot + 4
+      end
+      else if k = 'temperature_2m_min' then
+         wxLo[i] := MrVal(val, true)
+      else if k = 'precipitation_probability_max' then
+         if val <> 'null' then
+            wxRain[i] := MrVal(val, false)
+   end
+end;
+
+procedure WxSky (code, day : longint; var s : Str255);
+{ The WMO weather code in words, at most 20 characters. }
+var c : integer;
+begin
+   c := code;
+   if (c < 0) or (c > 99) then c := 100;
+   case c of
+      0      : if day = 0 then s := 'clear' else s := 'sunny';
+      1      : s := 'mainly clear';
+      2      : s := 'partly cloudy';
+      3      : s := 'overcast';
+      45     : s := 'fog';
+      48     : s := 'freezing fog';
+      51     : s := 'light drizzle';
+      53     : s := 'drizzle';
+      55     : s := 'heavy drizzle';
+      56, 57 : s := 'freezing drizzle';
+      61     : s := 'light rain';
+      63     : s := 'rain';
+      65     : s := 'heavy rain';
+      66, 67 : s := 'freezing rain';
+      71     : s := 'light snow';
+      73     : s := 'snow';
+      75     : s := 'heavy snow';
+      77     : s := 'snow grains';
+      80     : s := 'light showers';
+      81     : s := 'showers';
+      82     : s := 'heavy showers';
+      85     : s := 'snow showers';
+      86     : s := 'heavy snow showers';
+      95     : s := 'thunderstorms';
+      96, 99 : s := 'storms with hail';
+      otherwise
+         s := 'not given'
+   end
+end;
+
+procedure WxTmp (t : longint; var s : Str255);
+{ Tenths of a degree C as "52 F (11 C)". }
+var f, c : Str255;
+begin
+   MrNum(MrRnd(t * 9 div 5 + 320), f);
+   MrNum(MrRnd(t), c);
+   s := concat(f, concat(' F (', concat(c, ' C)')))
+end;
+
+procedure WxPoint (d : longint; var s : Str255);
+{ A wind direction in degrees as one of the 16 points, in words. }
+var k : integer;
+begin
+   k := ((d * 10 + 112) div 225) mod 16;
+   case k of
+      0  : s := 'north';
+      1  : s := 'north-northeast';
+      2  : s := 'northeast';
+      3  : s := 'east-northeast';
+      4  : s := 'east';
+      5  : s := 'east-southeast';
+      6  : s := 'southeast';
+      7  : s := 'south-southeast';
+      8  : s := 'south';
+      9  : s := 'south-southwest';
+      10 : s := 'southwest';
+      11 : s := 'west-southwest';
+      12 : s := 'west';
+      13 : s := 'west-northwest';
+      14 : s := 'northwest';
+      15 : s := 'north-northwest';
+   end
+end;
+
+procedure WxDay (i : integer; var s : Str255);
+{ Today, Tomorrow, then the weekday of a date such as 2026-10-19. }
+var y, m, d, w : integer;
+    v          : Str255;
+begin
+   if i = 1 then
+      s := 'Today'
+   else if i = 2 then
+      s := 'Tomorrow'
+   else if length(wxDate[i]) < 10 then
+      s := 'Day 3'
+   else begin
+      v := copy(wxDate[i], 1, 4);
+      y := MrVal(v, false);
+      v := copy(wxDate[i], 6, 2);
+      m := MrVal(v, false);
+      v := copy(wxDate[i], 9, 2);
+      d := MrVal(v, false);
+      if m < 3 then begin                 { Zeller: January and February }
+         m := m + 12;                     { count as months 13 and 14 of  }
+         y := y - 1                       { the year before               }
+      end;
+      w := (d + (13 * (m + 1)) div 5 + y + y div 4 - y div 100 + y div 400) mod 7;
+      case w of                           { 0 = Saturday }
+         0 : s := 'Saturday';
+         1 : s := 'Sunday';
+         2 : s := 'Monday';
+         3 : s := 'Tuesday';
+         4 : s := 'Wednesday';
+         5 : s := 'Thursday';
+         6 : s := 'Friday';
+      end
+   end
+end;
+
+procedure WxClock (var s : Str255);
+{ The time in "2026-10-17T20:15" as "8:15 pm". }
+var h  : integer;
+    v  : Str255;
+    p  : integer;
+    am : boolean;
+begin
+   s := '';
+   p := pos('T', wxTime);
+   if (p = 0) or (length(wxTime) < p + 5) then
+      exit(WxClock);
+   v := copy(wxTime, p + 1, 2);
+   h := MrVal(v, false);
+   am := h < 12;
+   h := h mod 12;
+   if h = 0 then h := 12;
+   MrNum(h, s);
+   s := concat(s, copy(wxTime, p + 3, 3));
+   if am then
+      s := concat(s, ' am')
+   else
+      s := concat(s, ' pm')
+end;
+
+function WxEnd : boolean;
+{ The page: now, then three days in columns. }
+var s, t, u : Str255;
+    i       : integer;
+    mph     : longint;
+    tab     : string[1];
+begin
+   WxEnd := false;
+   mrRCnt := 0;
+   if (wxGot mod 4) < 3 then
+      exit(WxEnd);
+   WxClock(t);
+   if t = '' then
+      s := 'Now:  '
+   else
+      s := concat('Now (', concat(t, '):  '));
+   WxTmp(wxTemp, t);
+   WxSky(wxCode, wxIsDay, u);
+   s := concat(s, concat(t, concat(', ', concat(u, '.'))));
+   MrPut(s);
+   mph := (wxWind * 621 + 5000) div 10000;
+   if mph < 1 then
+      s := '      The wind is calm.'
+   else begin
+      MrNum(mph, t);
+      s := concat('      Wind ', concat(t, ' mph ('));
+      MrNum(MrRnd(wxWind), t);
+      s := concat(s, concat(t, ' km/h) from the '));
+      WxPoint(wxDir, t);
+      s := concat(s, concat(t, '.'))
+   end;
+   MrPut(s);
+   s := '';
+   MrPut(s);
+   if wxGot >= 7 then begin                { columns by TAB: MAIN's PaneStr }
+      tab := ' ';
+      tab[1] := chr(9);
+      s := concat(tab, concat('Sky', concat(tab, concat('High', concat(tab, concat('Low', concat(tab, 'Rain')))))));
+      MrPut(s);
+      for i := 1 to 3 do
+         if wxDate[i] <> '' then begin
+            WxDay(i, s);
+            WxSky(wxDCode[i], 1, t);
+            s := concat(s, concat(tab, t));
+            WxTmp(wxHi[i], t);
+            s := concat(s, concat(tab, t));
+            WxTmp(wxLo[i], t);
+            s := concat(s, concat(tab, t));
+            s := concat(s, tab);
+            if wxRain[i] >= 0 then begin
+               MrNum(wxRain[i], t);
+               s := concat(s, concat(t, '%'))
+            end;
+            MrPut(s)
+         end;
+      s := '';
+      MrPut(s)
+   end;
+   s := 'From open-meteo.com (no key needed).  Rain = the chance of rain that day.';
+   MrPut(s);
+   WxEnd := true
+end;
+
+{------------------------------------------------------------------------}
+{ Weather icons (REV P).  Drawn with QuickDraw, no pictures: the calls   }
+{ the world map proved (PaintOval, EraseOval, FrameOval, MoveTo, LineTo, }
+{ PaintRect).  An icon is laid out on a 24 x 16 grid and drawn at any    }
+{ size: 22 x 14 in a forecast row, 48 x 32 beside "Now".                 }
+{------------------------------------------------------------------------}
+
+function IcX (fx : integer) : integer;
+begin
+   IcX := icL + (fx * icW) div 24
+end;
+
+function IcY (fy : integer) : integer;
+begin
+   IcY := icT + (fy * icH) div 16
+end;
+
+procedure IcOval (x1, y1, x2, y2, how : integer);
+{ An oval on the grid: how 1 = paint, 2 = erase, 3 = frame. }
+var r : Rect;
+begin
+   SetRect(r, IcX(x1), IcY(y1), IcX(x2), IcY(y2));
+   if how = 1 then
+      PaintOval(r)
+   else if how = 2 then
+      EraseOval(r)
+   else
+      FrameOval(r)
+end;
+
+procedure IcLine (x1, y1, x2, y2 : integer);
+begin
+   MoveTo(IcX(x1), IcY(y1));
+   LineTo(IcX(x2), IcY(y2))
+end;
+
+procedure IcSun (dx, dy : integer);
+{ A sun, its middle at grid point 12 + dx, 8 + dy. }
+begin
+   IcOval(8 + dx, 5 + dy, 16 + dx, 12 + dy, 1);
+   IcLine(12 + dx, 1 + dy, 12 + dx, 3 + dy);
+   IcLine(12 + dx, 14 + dy, 12 + dx, 15 + dy);
+   IcLine(3 + dx, 8 + dy, 6 + dx, 8 + dy);
+   IcLine(18 + dx, 8 + dy, 21 + dx, 8 + dy);
+   IcLine(5 + dx, 3 + dy, 7 + dx, 4 + dy);
+   IcLine(17 + dx, 4 + dy, 19 + dx, 3 + dy);
+   IcLine(5 + dx, 13 + dy, 7 + dx, 12 + dy);
+   IcLine(17 + dx, 12 + dy, 19 + dx, 13 + dy)
+end;
+
+procedure IcMoon (dx, dy : integer);
+{ A crescent: a disc with a disc taken out of its right side. }
+begin
+   IcOval(7 + dx, 2 + dy, 17 + dx, 14 + dy, 1);
+   IcOval(10 + dx, 1 + dy, 20 + dx, 12 + dy, 2)
+end;
+
+procedure IcCloud (dy : integer);
+{ A cloud outline with a flat base: three lumps and a base painted      }
+{ solid, then the same shapes one grid step smaller erased, which       }
+{ leaves only the outside.  dy moves it down (the base is at 14 + dy).  }
+var r : Rect;
+begin
+   IcOval(2, 7 + dy, 11, 15 + dy, 1);
+   IcOval(6, 1 + dy, 17, 12 + dy, 1);
+   IcOval(13, 5 + dy, 22, 15 + dy, 1);
+   SetRect(r, IcX(6), IcY(9 + dy), IcX(18), IcY(15 + dy));
+   PaintRect(r);
+   IcOval(3, 8 + dy, 10, 14 + dy, 2);
+   IcOval(7, 2 + dy, 16, 11 + dy, 2);
+   IcOval(14, 6 + dy, 21, 14 + dy, 2);
+   SetRect(r, IcX(6), IcY(9 + dy), IcX(18), IcY(14 + dy));
+   EraseRect(r)
+end;
+
+procedure WxIcon (code, day : longint; left, top, w, h : integer);
+{ The icon for a WMO weather code; day = 0 at night (a moon, not a sun). }
+var c : integer;
+    r : Rect;
+begin
+   icL := left;
+   icT := top;
+   icW := w;
+   icH := h;
+   PenNormal;
+   SetRect(r, left, top, left + w, top + h);
+   EraseRect(r);
+   c := code;
+   if (c < 0) or (c > 99) then
+      exit(WxIcon);
+   if c = 0 then begin                              { clear }
+      if day = 0 then IcMoon(0, 0) else IcSun(0, 0)
+   end
+   else if (c = 1) or (c = 2) then begin            { a little cloud }
+      if day = 0 then IcMoon(-5, -2) else IcSun(-6, -3);
+      IcCloud(1)
+   end
+   else if c = 3 then                               { overcast }
+      IcCloud(0)
+   else if (c = 45) or (c = 48) then begin          { fog: lines }
+      IcLine(2, 4, 20, 4);
+      IcLine(5, 8, 23, 8);
+      IcLine(1, 12, 19, 12)
+   end
+   else if (c >= 71) and (c <= 77) or (c = 85) or (c = 86) then begin   { snow: dots }
+      IcCloud(-2);
+      SetRect(r, IcX(6), IcY(14), IcX(6) + 2, IcY(14) + 2);
+      PaintRect(r);
+      SetRect(r, IcX(12), IcY(15), IcX(12) + 2, IcY(15) + 2);
+      PaintRect(r);
+      SetRect(r, IcX(18), IcY(14), IcX(18) + 2, IcY(14) + 2);
+      PaintRect(r)
+   end
+   else if c >= 95 then begin                       { a storm: a bolt }
+      IcCloud(-2);
+      IcLine(13, 12, 10, 14);
+      IcLine(10, 14, 14, 14);
+      IcLine(14, 14, 11, 16)
+   end
+   else if c >= 51 then begin                       { drizzle, rain, showers: streaks }
+      IcCloud(-2);
+      IcLine(7, 13, 5, 16);              { each streak twice, side by side: }
+      IcLine(8, 13, 6, 16);              { still visible at 22 x 14         }
+      IcLine(12, 13, 10, 16);
+      IcLine(13, 13, 11, 16);
+      IcLine(17, 13, 15, 16);
+      IcLine(18, 13, 16, 16)
+   end
+end;
+
+procedure WxPaint (y0, lh : integer);
+{ The icons on the weather page: y0 is the top of pane line 1, lh the    }
+{ height of a line.  "Now" is pane line 4; the three days lines 8 to 10. }
+var i : integer;
+begin
+   if not wxOn then
+      exit(WxPaint);
+   WxIcon(wxCode, wxIsDay, 470, y0 + 3 * lh - 4, 48, 32);
+   if wxGot >= 7 then
+      for i := 1 to 3 do
+         if wxDate[i] <> '' then
+            WxIcon(wxDCode[i], 1, 100, y0 + (6 + i) * lh + 1, 22, 14)
+end;
+
+end.

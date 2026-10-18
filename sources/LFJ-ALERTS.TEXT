@@ -1,0 +1,135 @@
+; ==========================================================================
+;  LFJ-ALERTS.TEXT -- phrase-file source for LisaFuji (419312).
+;  Compiled by the Workshop 'Alert' tool into T419312PHRASE.
+;  Comments on their OWN lines; blank lines are STRUCTURAL; alert numbers
+;  ascend and 1 and 2 are REQUIRED; each section ends with a lone 0.
+; ==========================================================================
+;
+; REV E -- 14-Oct-2026: Test menu item 9, Set the Lisa Clock from the
+; Network .../C.  About box says 0.5 REV E.
+; REV F -- 15-Oct-2026: FnBus frame resync (no phrase changes).  About box says 0.5 REV F.
+; REV G -- 16-Oct-2026: CLOSE before/after OPEN, OPEN wait 25 s, Q cancels an empty prompt.  About says 0.5 REV G.
+; REV O -- 17-Oct-2026: 1.1.  Space menu item 3 Who Is Aboard/P; new menu 5 Weather (O, Set Your Town);
+; Test, Speed, Help and Version move to 6 to 9.  About says LisaFuji 1.1.
+; REV N -- 17-Oct-2026: no phrase change (map page line in MAIN).
+; REV M -- 17-Oct-2026: RELEASE 1.0.  About says LisaFuji 1.0 (17 October 2026).
+; REV L -- 17-Oct-2026: RELEASE.  About says LisaFuji 0.6 (17 October 2026).
+; REV K -- 17-Oct-2026: the space station on a world map.  About says 0.6 REV K.
+; REV J -- 16-Oct-2026: LisaFuji 0.6.  Space menu added as menu 4 (Where Is the Space Station, Set Your Town);
+; Test, Speed, Help and Version move to 5, 6, 7 and 8.  About says 0.6 REV J.
+; REV D -- 14-Oct-2026: Wiki menu added as menu 3 (Search Wikipedia,
+; Apple Lisa); Test, Speed, Help and Version move to 4, 5, 6 and 7.
+; About box says 0.4 REV D and mentions Wikipedia.
+; REV C -- 13-Oct-2026: About box says 0.3 REV C.  Nothing else changed.
+; REV B -- 12-Oct-2026: News menu added as menu 2 (nine categories, in
+; NwSlug's order); Test, Speed, Help and Version move to 3, 4, 5 and 6.
+; About box mentions the news.  Still three alerts.
+; REV A -- 10-Oct-2026: first build.  Three alerts, five menus.
+; Cache bytes 4000: well above what the Alert tool suggests for a file
+; this small (below its suggestion the tool pauses for a keypress and
+; eats the next line of the MAKE exec -- the InstallTool lesson).
+; Menus are matched BY POSITION against the mi* constants in LFJ-GLOBALS;
+; a '-' separator counts as a position.  Keep the two files in lockstep.
+; No menu item starts with a digit: a line that starts with a number is
+; how this file marks a new menu or alert.
+;
+; ---- FILE HEADER ---------------------------------------------------------
+1
+4
+4000
+?
+Wait
+Stop
+Note
+Caution
+Cancel
+OK
+
+; ==== ALERTS ==============================================================
+;
+1 note alert
+LisaFuji could not find the message that belongs here.
+If you cannot proceed, mention the number ^N.
+
+2 stop alert
+LisaFuji is having trouble reaching the disk that holds the
+tool.^L^L
+Put your documents away one at a time, or press the on-off button to
+save them all.
+
+11 note alert
+LisaFuji 1.1   (17 October 2026)^L^L
+News, Wikipedia, space station, network clock and test tool for an RS-232
+FujiNet on Serial B.  The News menu reads the FujiNet news service; the Wiki
+menu searches and reads Wikipedia; the Space menu shows the space station
+on a world map and how far it is from your town, and who is aboard; the Weather
+menu shows the weather in your town; C sets the Lisa's clock from the network, the
+twin-year way; the Test menu checks the link step by step.^L^L
+N news, S Wikipedia, I space station, P crew, O weather, A tests, H help.^L
+Tool 419312.  T. O'Connor (bmwcyclist), 2026.
+
+0
+
+; ==== MENUS ===============================================================
+1
+File/Print
+Set Aside Everything
+Set Aside "LisaFuji"
+-
+Save & Put Away
+
+2
+News
+Top Stories
+World
+Science
+Business
+Technology
+Health
+Entertainment
+Politics
+Sports
+
+3
+Wiki
+Search Wikipedia .../S
+Apple Lisa
+
+4
+Space
+Where Is the Space Station/I
+Set Your Town ...
+Who Is Aboard the Space Stations/P
+
+5
+Weather
+The Weather in Your Town/O
+Set Your Town ...
+
+6
+Test
+Run Tests 1 to 3/A
+Fetch a Web File .../F
+-
+Test 1 FujiNet Ready
+Test 2 Adapter and WiFi
+Test 3 Network Clock
+-
+Show Last Bytes/B
+Set the Lisa Clock from the Network .../C
+
+7
+Speed
+Use 9600 baud
+Use 19200 baud
+
+8
+Help
+How to Use/H
+Wiring and Set-up/W
+
+9
+Version
+About LisaFuji
+
+0

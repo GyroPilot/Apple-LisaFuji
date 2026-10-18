@@ -1,0 +1,42 @@
+$EXEC
+${ REV O  17-Oct-2026  LisaFuji 1.1: MORE (crew and weather) added.      }
+${ REV K  17-Oct-2026  LisaFuji 0.6 REV K: MAP (the world map unit) added.    }
+${ REV J  16-Oct-2026  LisaFuji 0.6: ISS (the space station unit) added.     }
+${ REV E  14-Oct-2026  LisaFuji 0.5 (network clock).  TWUNIT added.          }
+${ REV C  13-Oct-2026  LisaFuji 0.3 (real-clock timeouts).  Steps as REV B. }
+${ REV B  12-Oct-2026  LisaFuji 0.2 (News).  Steps unchanged from REV A.    }
+${ REV A  10-Oct-2026  First build.                                          }
+${==========================================================================}
+${ LFJ-COMP.TEXT -- compile LisaFuji: TWUNIT, GLOBALS, FNBUS, then MAIN.   }
+${==========================================================================}
+F{ilemgr}D{elete}LFJ/TWUNIT.OBJ  Y{es}
+        D{elete}LFJ/FNBUS.OBJ  Y{es}
+        D{elete}LFJ/MAP.OBJ  Y{es}
+        D{elete}LFJ/MORE.OBJ  Y{es}
+        D{elete}LFJ/ISS.OBJ  Y{es}
+        D{elete}LFJ/GLOBALS.OBJ  Y{es}
+        D{elete}LFJ/MAIN.OBJ  Y{es}
+        Q{uit}
+${                                                                          }
+P{ascal Compile}LFJ/TWUNIT.TEXT
+{no listing file - this comment-only line is the [RETURN] answer}
+LFJ/TWUNIT.OBJ
+P{ascal Compile}LFJ/GLOBALS.TEXT
+{no listing file}
+LFJ/GLOBALS.OBJ
+P{ascal Compile}LFJ/FNBUS.TEXT
+{no listing file}
+LFJ/FNBUS.OBJ
+P{ascal Compile}LFJ/MAP.TEXT
+{no listing file}
+LFJ/MAP.OBJ
+P{ascal Compile}LFJ/MORE.TEXT
+{no listing file}
+LFJ/MORE.OBJ
+P{ascal Compile}LFJ/ISS.TEXT
+{no listing file}
+LFJ/ISS.OBJ
+P{ascal Compile}LFJ/MAIN.TEXT
+{no listing file}
+LFJ/MAIN.OBJ
+$ENDEXEC

@@ -1,0 +1,31 @@
+$EXEC
+${ REV O  17-Oct-2026  LisaFuji 1.1: MORE.OBJ (crew and weather).          }
+${ REV K  17-Oct-2026  LisaFuji 0.6 REV K: MAP.OBJ (the world map).           }
+${ REV J  16-Oct-2026  LisaFuji 0.6: ISS.OBJ and IOSFPLIB (real numbers).    }
+${ REV E  14-Oct-2026  LisaFuji 0.5 (network clock).  TWUNIT added.          }
+${ REV C  13-Oct-2026  LisaFuji 0.3 (real-clock timeouts).  Steps as REV B. }
+${ REV B  12-Oct-2026  LisaFuji 0.2 (News).  Steps unchanged from REV A.    }
+${ REV A  10-Oct-2026  First build.                                          }
+${==========================================================================}
+${ LFJ-LINK.TEXT -- link LisaFuji.  Intrinsic units (QuickDraw, the WM     }
+${ units, AlertMgr, SysCall ...) are NOT named: the linker finds them      }
+${ through INTRINSIC.LIB.  Same recipe as LFU-LINK and TWC-LINK.           }
+${==========================================================================}
+F{ilemgr}D{elete}LFJ/LFJ.OBJ  Y{es}
+        Q{uit}
+${                                                                          }
+L{inker}LFJ/MAIN.OBJ
+LFJ/GLOBALS.OBJ
+LFJ/FNBUS.OBJ
+LFJ/TWUNIT.OBJ
+LFJ/MAP.OBJ
+LFJ/MORE.OBJ
+LFJ/ISS.OBJ
+IOSFPLIB.OBJ
+IOSPASLIB.OBJ
+SYS1LIB.OBJ
+SYS2LIB.OBJ
+{end of the input list - this comment-only line is the blank answer}
+{no listing file - second blank answer}
+LFJ/LFJ.OBJ
+$ENDEXEC

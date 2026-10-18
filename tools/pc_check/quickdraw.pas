@@ -1,0 +1,52 @@
+unit QuickDraw; interface
+uses UnitStd;
+type Point = record v, h : integer end;
+     Rect = record top, left, bottom, right : integer end;
+     GrafPort = record portRect : Rect end;
+     GrafPtr = ^GrafPort;
+     FontInfo = record ascent, descent, widMax, leading : integer end;
+     Pattern = packed array [0..7] of 0..255;
+var thePort : GrafPtr;
+    scr : array[1..40] of Str255; scrN : integer; penV : integer;
+procedure InitGraf(p : pointer);
+procedure SetPort(p : GrafPtr);
+procedure EraseRect(r : Rect);
+procedure ValidRect(r : Rect);
+procedure GetFontInfo(var fi : FontInfo);
+procedure MoveTo(h, v : integer);
+procedure DrawString(s : Str255);
+procedure DumpScreen(why : Str255);
+procedure PenNormal;
+procedure PenPat(p : Pattern);
+procedure LineTo(h, v : integer);
+procedure SetRect(var r : Rect; l, t, rr, b : integer);
+procedure FrameRect(r : Rect);
+procedure PaintRect(r : Rect);
+procedure EraseOval(r : Rect);
+procedure FrameOval(r : Rect);
+procedure PaintOval(r : Rect);
+var qdCalls : longint;
+implementation
+procedure InitGraf(p : pointer); begin scrN := 0 end;
+procedure SetPort(p : GrafPtr); begin end;
+procedure EraseRect(r : Rect); begin scrN := 0 end;
+procedure ValidRect(r : Rect); begin end;
+procedure GetFontInfo(var fi : FontInfo); begin fi.ascent := 10 end;
+procedure MoveTo(h, v : integer); begin penV := v end;
+procedure DrawString(s : Str255); begin scrN := scrN + 1; scr[scrN] := s; if length(s) > 80 then writeln('!!! line over 80') end;
+procedure PenNormal; begin end;
+procedure PenPat(p : Pattern); begin end;
+procedure LineTo(h, v : integer); begin qdCalls := qdCalls + 1 end;
+procedure SetRect(var r : Rect; l, t, rr, b : integer); begin r.left := l; r.top := t; r.right := rr; r.bottom := b end;
+procedure FrameRect(r : Rect); begin end;
+procedure PaintRect(r : Rect); begin qdCalls := qdCalls + 1 end;
+procedure EraseOval(r : Rect); begin end;
+procedure FrameOval(r : Rect); begin end;
+procedure PaintOval(r : Rect); begin qdCalls := qdCalls + 1 end;
+procedure DumpScreen(why : Str255);
+var i : integer;
+begin
+  writeln('---------------- ', why, '  [', scrN, ' lines]');
+  for i := 1 to scrN do writeln('| ', scr[i]);
+end;
+end.
