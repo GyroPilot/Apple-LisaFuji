@@ -1,6 +1,6 @@
 # LisaFuji changelog
 
-## 1.1 REV P -- 17-18 Oct 2026 -- built, waiting for the 2/10
+## 1.1 REV P -- 17-19 Oct 2026 -- RELEASE, tested on the Lisa 2/10 (19 Oct)
 - The weather page draws a picture for each day and a big one for now (sun, moon, clouds, rain, snow, storm, fog),
   with QuickDraw shapes only.
 ## 1.1 REV O -- 17 Oct 2026
