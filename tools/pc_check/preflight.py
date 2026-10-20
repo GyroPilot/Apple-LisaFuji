@@ -43,7 +43,7 @@ def strip(src):
         out.append(c); i += 1
     return "".join(out), lits, probs
 def idents(code): return re.findall(r"[A-Za-z_][A-Za-z0-9_]*", code)
-lisa = {}
+lisa, lisadecl = {}, {}
 if root != "-":
     pats = ["LIBSM/LIBSM-UNITSTD", "LIBSM/LIBSM-UNITHZ", "LIBQD/libqd-STORAGE", "LIBQD/libqd-QUICKDRAW", "LIBFM/libfm-fontmgr",
             "LIBOS/libos-syscall", "LIBWM/LIBWM-EVENTS", "LIBWM/libwm-folders", "LIBWM/LIBWM-MENUS", "LIBAM/LIBAM-ALERTMGR",
@@ -56,6 +56,12 @@ if root != "-":
         code, _, _ = strip(src[:m.start()] if m else src)
         for w in idents(code):
             lisa.setdefault(w.lower()[:8], set()).add((w, os.path.basename(g[0]).split(".")[0]))
+        # 18-Oct-2026 (KNOWN PITFALLS 27): the names a Lisa unit DECLARES (const/type/var/routine; record fields too)
+        dcode = re.sub(r"\([^()]*\)", " ", code)          # parameter lists are not declarations
+        for m in re.finditer(r"(?:^|;)\s*(?:const|type|var)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*[A-Za-z_][A-Za-z0-9_]*\s*)*[:=][^=]", dcode, re.I | re.M):
+            lisadecl.setdefault(m.group(1).lower(), os.path.basename(g[0]).split(".")[0])
+        for m in re.finditer(r"\b(?:procedure|function)\s+([A-Za-z_][A-Za-z0-9_]*)", code, re.I):
+            lisadecl.setdefault(m.group(1).lower(), os.path.basename(g[0]).split(".")[0])
     print("Lisa interface words read from %d units: %d distinct 8-character stems" % (len(pats), len(lisa)))
 allids, total_bad = {}, 0
 for f in files:
@@ -69,6 +75,18 @@ for f in files:
     litmax = max([len(s) for _, s in lits] or [0])
     tabs = src.count("\t"); nonascii = sum(1 for ch in src if ord(ch) > 126)
     is_unit = toks[0] == "unit"
+    vc, stack = 0, []                  # 18-Oct-2026: a variant part's case shares its record's end
+    for t in toks:
+        if t in ("begin", "record"):
+            stack.append(t)
+        elif t == "case":
+            if stack and stack[-1] == "record":
+                vc += 1
+            else:
+                stack.append(t)
+        elif t == "end" and stack:
+            stack.pop()
+    cs -= vc
     okbe = (b + cs + rc + (1 if is_unit else 0) == e)
     print("%-18s braces %d/%d  begin %d + case %d + record %d%s = end %d %s  longest line %d  longest literal %d  tabs %d  non-ASCII %d" %
           (os.path.basename(f), ob, cb, b, cs, rc, " + unit 1" if is_unit else "", e, "ok" if okbe else "MISMATCH", longest, litmax, tabs, nonascii))
@@ -92,4 +110,19 @@ if lisa:
     print("identifiers that only SHARE 8 characters with a different Lisa word (each one is a risk):")
     for w in stemonly: print("   RISK", w, "~", sorted(lisa[w[:8]])); total_bad += 1
     if not stemonly: print("   none")
+# 18-Oct-2026 (KNOWN PITFALLS 27): our UNIT-LEVEL names (before the first routine) that a used Lisa unit already
+# declares: Lisa Pascal gives Error 100 "Identifier declared twice" (mSet vs SysCall's mset); Free Pascal lets it pass.
+if lisadecl:
+    n27 = 0
+    for fl in files:
+        src = open(fl).read()
+        m = re.search(r"^\s*(procedure|function)\s", src, re.I | re.M)
+        code, _, _ = strip(src[:m.start()] if m else src)
+        code = re.sub(r"\buses\b.*?;", " ", code, flags=re.I | re.S)
+        for m in re.finditer(r"(?:^|;)\s*(?:const|type|var)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*[A-Za-z_][A-Za-z0-9_]*\s*)*[:=][^=]", code, re.I | re.M):
+            w = m.group(1)
+            if w.lower() in lisadecl and w.lower() not in KW:
+                print("   CLASH %s: our %s is already declared by %s (Error 100 on the Lisa)" % (os.path.basename(fl), w, lisadecl[w.lower()]))
+                total_bad += 1; n27 += 1
+    print("our unit-level names that a Lisa unit already declares: %d" % n27)
 print("PRE-FLIGHT", "CLEAN" if total_bad == 0 else "FOUND %d PROBLEM(S)" % total_bad)
