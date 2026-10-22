@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-# PCFuji.py  REV B  13-Oct-2026  (REV A 10-Oct-2026)
+# PCFuji.py  REV C  22-Oct-2026  (REV B 13-Oct, REV A 10-Oct-2026)
+# REV C runs the same on Windows, macOS and Linux: the port names and the
+# install hints follow the system; nothing else changed.
 # REV B adds --lisaem: answer a Lisa running in the LisaEm emulator, whose
 # serial port is set to TelnetD.
 # A stand-in for the RS-232 FujiNet, for testing LisaFuji before the board
@@ -20,16 +22,21 @@
 # NULL-MODEM adapter in line -- the same cabling as LISACom to the PC.
 # (The real FujiNet is the opposite: NO null modem.)
 #
-# Run:   python PCFuji.py            picks the FTDI port, 9600 baud
-#        python PCFuji.py COM5       a named port
-#        python PCFuji.py COM5 19200
-#        python PCFuji.py --tcp 1990 (a network socket instead; for testing)
-#        python PCFuji.py --lisaem      LisaEm, Serial B set to TelnetD (port 9300)
-#        python PCFuji.py --lisaem 9301 LisaEm, Serial A set to TelnetD
+# Needs Python 3 and the pyserial package:
+#   Windows   py -m pip install pyserial
+#   macOS     python3 -m pip install pyserial   (a USB-serial adapter needs no driver on 10.15 or later)
+#   Linux     python3 -m pip install pyserial   and your user in the dialout group (or run with sudo once)
+# Run:   python3 PCFuji.py                 picks the USB-serial adapter, 9600 baud
+#        python3 PCFuji.py COM5            a named port (Windows)
+#        python3 PCFuji.py /dev/tty.usbserial-A1B2C3   (macOS)
+#        python3 PCFuji.py /dev/ttyUSB0 19200           (Linux, and a speed)
+#        python3 PCFuji.py --tcp 1990      a network socket instead; for testing
+#        python3 PCFuji.py --lisaem        LisaEm, Serial B set to TelnetD (port 9300)
+#        python3 PCFuji.py --lisaem 9301   LisaEm, Serial A set to TelnetD
 # Stop:  Ctrl-C.
 import sys, time, socket, datetime, urllib.request, urllib.error, re
 
-VERSION = "PCFuji REV B"
+VERSION = "PCFuji REV C"
 END, ESC, ESC_END, ESC_ESC = 0xC0, 0xDB, 0xDC, 0xDD
 ACK, NAK = 0x06, 0x15
 FIELD_BYTES = [0, 1, 2, 3, 4, 2, 4, 4]      # parameter bytes for descriptor 0..7
@@ -177,13 +184,14 @@ def pick_port():
     from serial.tools import list_ports
     ports = list(list_ports.comports())
     if not ports:
-        sys.exit("No serial ports found.  Is the USB-serial adapter plugged in?")
+        hint = "" if sys.platform == "win32" else "  (Linux: is your user in the dialout group?)"
+        sys.exit("No serial ports found.  Is the USB-serial adapter plugged in?" + hint)
     ftdi = [p for p in ports if p.vid == 0x0403 or "FTDI" in (p.manufacturer or "").upper()]
     if len(ftdi) == 1:
         return ftdi[0].device
     if len(ports) == 1:
         return ports[0].device
-    print("Serial ports on this PC:")
+    print("Serial ports on this computer:")
     for i, p in enumerate(ports, 1):
         print("  %d  %s  %s" % (i, p.device, p.description))
     while True:
@@ -352,7 +360,8 @@ def main():
         try:
             import serial  # noqa: F401
         except ImportError:
-            sys.exit("This needs the pyserial package.  Run:   py -m pip install pyserial")
+            pip = "py -m pip install pyserial" if sys.platform == "win32" else "python3 -m pip install pyserial"
+            sys.exit("This needs the pyserial package.  Run:   " + pip)
         port = args[0] if args else pick_port()
         baud = int(args[1]) if len(args) > 1 else 9600
         try:

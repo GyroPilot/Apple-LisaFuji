@@ -32,7 +32,7 @@ Open LisaFuji; every key is on the start page:
 Speed menu: 9600 (start here) or 19200; it must match the FujiNet's own setting.
 
 **Hardware:** a FujiNet for RS-232 (FutureVision Research) on Serial B with a straight serial cable (the FujiNet is
-wired like a modem: no null modem). No FujiNet? `tools/PCFuji.py` stands in for one on a PC with a USB-serial adapter
+wired like a modem: no null modem). No FujiNet? `tools/PCFuji.py` stands in for one on a Windows, macOS or Linux computer with a USB-serial adapter
 (and for LisaEm over its TelnetD serial port), for everything but the board's WiFi.
 
 **Installing:** open the floppy and the hard disk side by side, select LisaFuji, Duplicate, and drag the duplicate
