@@ -86,6 +86,7 @@ const
    { times, in milliseconds }
    fnTick   = 50;             { one sleep while waiting }
    fnTmo    = 5000;           { wait for the first byte of a reply }
+   fnTmoPr  = 1500;           { phase 2: the same, when probing for the speed }
    fnTmoOp  = 25000;          { the same, for OPEN: outlast the board's own 15 s HTTP wait (REV G) }
    fnGap    = 2000;           { longest silence allowed inside a reply }
 
@@ -118,6 +119,7 @@ var
    fnRef    : integer;        { its refnum }
    fnPnp    : Pathname;       { -RS232B or -RS232A }
    fnPortA  : boolean;        { REV R: the FujiNet is on Serial A (false: Serial B) }
+   fnFound  : boolean;        { phase 2: the adapter's speed was found (FnFind) or set this launch }
    fnCparm  : DcType;
    fnCalls  : longint;        { commands sent since FnInit }
 
@@ -158,6 +160,8 @@ function  FnNClos  : integer;
 function  FnSetBd  (oldBd, newBd : longint; var stage : integer) : integer;
 function  FnCfgSv  (var vol : E_Name; baud : longint) : boolean;
 function  FnCfgLd  (var vol : E_Name; var baud : longint) : boolean;
+function  FnFind   (var baud : longint) : integer;
+procedure FnSpdMsg (rc, stage : integer; baud : longint; var msg : Str255);
 procedure FnNum    (n : longint; var txt : Str255);
 procedure FnHex    (v : integer; var txt : Str255);
 
@@ -193,6 +197,7 @@ begin
    fnConn   := 0;
    fnStat   := 0;
    fnPortA  := false;         { REV R }
+   fnFound  := false;         { phase 2 }
    fnPnp    := '-RS232B'
 end;
 
@@ -1042,6 +1047,8 @@ begin
    until (rc = fnOK) or (tries >= 6);
    if (rc = fnOK) and (not told) then
       stage := 7;
+   if rc = fnOK then
+      fnFound := true;                    { phase 2: no probe needed this launch }
    FnSetBd := rc
 end;
 
@@ -1151,6 +1158,68 @@ begin
    baud := v;
    fnPortA := pa;
    FnCfgLd := true
+end;
+
+
+{------------------------------------------------------------------------}
+{ Phase 2 (22-Oct): every tool follows the adapter's speed.               }
+{------------------------------------------------------------------------}
+
+function FnFind {var baud : longint} : integer;
+{ Which speed does the adapter answer at?  Try baud, then the other of  }
+{ 9600 and 19200, each with a short wait for the first byte of the      }
+{ ready reply.  fnOK: baud is the speed that answered and the port is   }
+{ open at it.  fnNoRep: neither answered (the port is closed).           }
+{ fnPortEr: the port would not open.  Once per launch (fnFound), from   }
+{ the tool's first port open; the right speed costs nothing, the wrong  }
+{ one about two seconds.                                                  }
+var rc, i : integer;
+    b2    : longint;
+begin
+   fnFound := true;
+   FnPortDn;
+   b2 := baud;
+   FnFind := fnNoRep;
+   for i := 1 to 2 do begin
+      if i = 2 then
+         if baud = 19200 then b2 := 9600 else b2 := 19200;
+      if not FnPortUp(b2) then begin
+         FnFind := fnPortEr;
+         exit(FnFind)
+      end;
+      rc := FnCall(fnDFuji, 0, 0, 0, 0, 0, fnTmoPr);
+      if (rc = fnOK) and (fnPlLen <> 512) then
+         rc := fnShort;
+      if rc = fnOK then begin
+         baud := b2;
+         FnFind := fnOK;
+         exit(FnFind)
+      end;
+      FnPortDn
+   end
+end;
+
+procedure FnSpdMsg {rc, stage : integer; baud : longint; var msg : Str255};
+{ One line saying how FnSetBd ended (stage 0: the speed was already      }
+{ baud), for the tools with a one-line message.  At most 43 characters  }
+{ (LisaCheckers' panel shows about 45).                                   }
+var part, part2 : Str255;
+begin
+   FnNum(baud, part);
+   if stage = 0 then
+      msg := concat('Already at ', concat(part, ' baud.'))
+   else if (rc = fnOK) and (stage = 7) then
+      msg := concat('FujiNet already at ', concat(part, ' baud; following it.'))
+   else if rc = fnOK then
+      msg := concat('Speed: ', concat(part, ' baud at both ends.'))
+   else if stage <= 3 then begin
+      FnNum(stage, part2);
+      msg := concat('FujiNet not changed (step ', concat(part2, ', code '));
+      FnNum(rc, part2);
+      msg := concat(msg, concat(part2, concat('); still ', concat(part, ' baud.'))))
+   end
+   else
+      msg := concat('FujiNet at ', concat(part, ' baud, not answering yet: retry.'))
 end;
 
 end.

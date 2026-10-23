@@ -399,8 +399,15 @@ var part : Str255;
     big  : Str255;
     row  : StatStr;
     pn   : Str255;
+    old  : longint;
 begin
    LineUp := true;
+   if not fnFound then begin            { REV T: which speed answers?  Once per launch. }
+      old := curBaud;
+      if FnFind(curBaud) = fnOK then
+         if curBaud <> old then
+            if FnCfgSv(myVol, curBaud) then ;
+   end;
    if FnPortUp(curBaud) then
       exit(LineUp);
    LineUp := false;

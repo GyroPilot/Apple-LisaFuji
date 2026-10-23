@@ -15,7 +15,7 @@ System 3.1.
 - **1.2 beta** -- the Speed menu sets the FujiNet too: Use 19200 baud posts the new speed to the adapter's own web
   page through the FujiNet's network device, restarts it and follows it (no more editing the SD card). The choice,
   with the port (Serial A or Serial B, new as well), is kept in FNSPEED.DATA beside the tool. Tested on the 2/10 at
-  19200 baud, 22 October 2026 (`releases/LISAFUJI_1_2.dc42`). The sources here are 1.2 beta (REV S).
+  19200 baud, 22 October 2026 (`releases/LISAFUJI_1_2.dc42`). The sources here are 1.2 beta (REV T: the launch-time speed probe, 23 October).
 
 ## Using it
 

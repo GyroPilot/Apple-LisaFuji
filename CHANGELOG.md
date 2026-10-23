@@ -1,5 +1,10 @@
 # LisaFuji changelog
 
+## 1.2 beta REV T -- 23 Oct 2026 -- the 1.2 beta release floppy (tested on the 2/10, 23 Oct)
+- The launch-time probe: at the first port open LisaFuji tries the saved speed, then the other of 9600/19200, with a
+  short wait for the ready reply, keeps what answers and saves it; so it follows an adapter another tool changed.
+  FnBus: fnFound, FnFind, FnSpdMsg (shared with TwinClock, Checkers, Salvo and the Browser). On the 2/10: opened
+  with no saved speed, found the adapter at 19200 and drew the station map.
 ## 1.2 beta REV S -- 22 Oct 2026 -- tested on the Lisa 2/10 at 19200 baud (22 Oct)
 - The Speed menu sets the FujiNet too: a form POST of serial_baud= to the adapter's own web page through its N:
   device (the RS-232 FujiNet has no speed command), then its Reset button, then the port again at the new speed and
