@@ -1153,6 +1153,8 @@ var row   : StatStr;
 begin
    promptOn := false;
    FnNum(baud, part);
+   if not fnFound then                  { 23-Oct: know the speed before saying 'already' }
+      if FnFind(curBaud) = fnOK then ;
    if baud = curBaud then begin
       big := concat('Already at ', concat(part, ' baud.  Press A to test.'));
       SetBig(big);
@@ -1175,14 +1177,14 @@ begin
    if (rc = fnOK) and (stage = 7) then begin
       row := concat('The FujiNet was already at ', concat(part, ' baud; LisaFuji follows.'));
       Head(row);
-      row := 'It did not answer at the old speed, but does at this one.  LisaFuji'
+      row := 'It did not answer at the old speed, but does at this one.'
    end
    else if rc = fnOK then begin
       row := concat('Speed changed: ', concat(part, ' baud at both ends.'));
       Head(row);
       row := 'The FujiNet restarted at the new speed and answers.  It keeps the';
       AddLine(row);
-      row := 'speed on its SD card; LisaFuji'
+      row := 'speed on its SD card.'
    end
    else if stage <= 3 then begin
       row := 'The FujiNet was not changed.';
@@ -1212,9 +1214,11 @@ begin
       AddLine(row);
       row := 'Wait a moment and press A to test.'
    end;
-   if rc = fnOK then
-      row := concat(row, ' keeps it in FNSPEED.DATA.');
-   AddLine(row);
+   AddLine(row);                        { 23-Oct: the note is its own line (notes 52) }
+   if rc = fnOK then begin
+      row := 'LisaFuji keeps the choice in FNSPEED.DATA beside the tool.';
+      AddLine(row)
+   end;
    if not ok then begin
       row := 'FNSPEED.DATA could not be written: the choice lasts until you quit.';
       AddLine(row)

@@ -1,5 +1,9 @@
 # LisaFuji changelog
 
+## 1.2 beta REV U -- 23 Oct 2026 -- the 1.2 beta release floppy (REV T tested on the 2/10, 23 Oct)
+- The speed page's FNSPEED.DATA note is its own line (REV T joined it onto a 70-character line: 96 characters into an
+  80-character string, which the Lisa does not range-check, so it drew off the window). The Speed menu probes for the
+  speed first when the port has not been opened yet, so 'Already at' is never a guess. Version box: 23 October.
 ## 1.2 beta REV T -- 23 Oct 2026 -- the 1.2 beta release floppy (tested on the 2/10, 23 Oct)
 - The launch-time probe: at the first port open LisaFuji tries the saved speed, then the other of 9600/19200, with a
   short wait for the ready reply, keeps what answers and saves it; so it follows an adapter another tool changed.
