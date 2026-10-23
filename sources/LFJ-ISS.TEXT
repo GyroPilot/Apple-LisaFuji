@@ -784,7 +784,7 @@ procedure IsPaint {left, top : integer};
 var i, x, y : integer;
     r       : Rect;
 begin
-   MapDraw(left, top);
+   MapDrawB(left, top);                 { REV Q: in bands, 9 CopyBits not 900 LineTo }
    for i := 1 to tdN do begin
       x := left + tdX[i];
       y := top + tdY[i];

@@ -55,7 +55,7 @@ program LisaFuji;
 {                        click stops it.                                 }
 {   Show Last Bytes (B) -- the last frame sent and the reply, in hex,   }
 {                        to compare with GOLDEN_TRACES.md.               }
-{   Speed menu        -- 9600 (start here) or 19200.                    }
+{   Speed menu        -- 9600 or 19200; sets the FujiNet too (REV S).  }
 {                                                                        }
 { The port is opened for each command and closed after it, so LISACom   }
 { can have Serial B back without quitting this tool.                     }
@@ -311,6 +311,15 @@ end;
 { Shared pieces of every command.                                        }
 {------------------------------------------------------------------------}
 
+procedure PortNm (var s : Str255);
+{ REV R.  'Serial A' or 'Serial B': where the FujiNet is. }
+begin
+   if fnPortA then
+      s := 'Serial A'
+   else
+      s := 'Serial B'
+end;
+
 procedure Head (var ttl : StatStr);
 { Clear the pane; version and speed, the title, a blank line. }
 var part : Str255;
@@ -319,7 +328,8 @@ var part : Str255;
 begin
    LogMode;
    FnNum(curBaud, part);
-   big := concat(lfjVersion, '     Serial B, ');
+   PortNm(big);                         { REV R: Serial A or B }
+   big := concat(lfjVersion, concat('     ', concat(big, ', ')));
    big := concat(big, concat(part, ' baud'));
    AddBig(big);
    AddLine(ttl);
@@ -368,9 +378,12 @@ begin
    big := concat(lead, concat('FAIL: ', reason));
    SetBig(big);
    if (rc = fnNoRep) or (rc = fnStall) or (rc = fnBadFr) then begin
-      row := '   Check: FujiNet powered?  Cable on Serial B, no null modem?';
+      if fnPortA then                   { REV R }
+         row := '   Check: FujiNet powered?  Cable on Serial A, no null modem?'
+      else
+         row := '   Check: FujiNet powered?  Cable on Serial B, no null modem?';
       AddLine(row);
-      row := '   Same speed at both ends (baud= on the SD card, then restart)?';
+      row := '   Same speed at both ends?  Try the other speed in the Speed menu.';
       AddLine(row)
    end
    else if rc = fnPortEr then begin
@@ -381,26 +394,30 @@ begin
 end;
 
 function LineUp : boolean;
-{ Open Serial B at curBaud.  FALSE: the reason and the fix are shown.   }
+{ Open the port at curBaud.  FALSE: the reason and the fix are shown.  }
 var part : Str255;
     big  : Str255;
     row  : StatStr;
+    pn   : Str255;
 begin
    LineUp := true;
    if FnPortUp(curBaud) then
       exit(LineUp);
    LineUp := false;
+   PortNm(pn);
    FnNum(fnEcode, part);
-   big := concat('Serial B would not open (ecode ', part);
+   big := concat(pn, concat(' would not open (ecode ', part));
    FnNum(fnMntEc, part);
    big := concat(big, concat(', mount ', part));
    big := concat(big, ').');
    AddBig(big);
-   row := 'Quit LISACom if it is running: only one tool can hold Serial B.';
+   row := concat('Quit LISACom if it is running: only one tool can hold ', concat(pn, '.'));
    AddLine(row);
    row := 'Otherwise open Preferences, choose Connect Devices, and set the';
    AddLine(row);
-   row := 'Serial B Connector to Serial Cable.  Then try again.';
+   row := concat(pn, ' Connector to Serial Cable.  Then try again.');
+   AddLine(row);
+   row := 'The Speed menu chooses Serial A or Serial B.';
    AddLine(row)
 end;
 
@@ -838,7 +855,8 @@ var row : StatStr;
 begin
    promptOn := false;
    quiet := true;
-   row := 'News, Wikipedia, space, weather and tests: an RS-232 FujiNet on Serial B.';
+   row := 'News, Wikipedia, space, weather and tests: an RS-232 FujiNet on Serial ';
+   if fnPortA then row := concat(row, 'A.') else row := concat(row, 'B.');
    Head(row);
    row := 'N = the news: headlines and articles from the FujiNet news service';
    AddLine(row);
@@ -1037,7 +1055,7 @@ begin
    AddLine(row);
    row := 'B shows the bytes of the last command, to compare with the traces.';
    AddLine(row);
-   row := 'Speed menu: start at 9600.  It must match the FujiNet''s SD card.';
+   row := 'Speed menu: 9600 or 19200.  It sets the FujiNet too, through its web page.';
    AddLine(row);
    row := 'N or the News menu: pick a category, then a headline by its number.';
    AddLine(row);
@@ -1056,7 +1074,9 @@ begin
    quiet := true;
    row := 'Wiring and set-up';
    Head(row);
-   row := 'FujiNet: power it from USB-C.  Connect Lisa Serial B to its 9-pin';
+   row := 'FujiNet: power it from USB-C.  Connect Lisa Serial ';
+   if fnPortA then row := concat(row, 'A') else row := concat(row, 'B');
+   row := concat(row, ' to its 9-pin');
    AddLine(row);
    row := 'socket, wired as for a modem: NO null-modem adapter.';
    AddLine(row);
@@ -1064,36 +1084,134 @@ begin
    AddLine(row);
    row := 'SD card: in the file fnconfig.ini, under [Serial], put baud=9600';
    AddLine(row);
-   row := 'and restart the FujiNet.  The Speed menu here must say the same.';
+   row := 'and restart the FujiNet.  The Speed menu can change both ends later.';
    AddLine(row);
    row := '';
    AddLine(row);
-   row := 'Lisa: Preferences, Connect Devices, Serial B Connector set to';
+   row := 'Lisa: Preferences, Connect Devices, Serial ';
+   if fnPortA then row := concat(row, 'A') else row := concat(row, 'B');
+   row := concat(row, ' Connector set to');
    AddLine(row);
    row := 'Serial Cable.';
    AddLine(row);
    row := '';
    AddLine(row);
-   row := 'Quit LISACom first: only one tool can hold Serial B at a time.';
+   row := 'Quit LISACom first: only one tool can hold a serial port at a time.';
+   AddLine(row);
+   row := 'The Speed menu chooses Serial A or Serial B (B when LisaFuji opens).';
    AddLine(row);
    quiet := false;
    DrawShow
 end;
 
-procedure SetSpeed (baud : longint);
+procedure UsePort (a : boolean);
+{ REV R.  The Speed menu's Use Serial A / Use Serial B: close the port  }
+{ (it opens again on the next request) and say what the Lisa needs.     }
 var row : StatStr;
+    pn  : Str255;
 begin
    promptOn := false;
-   curBaud := baud;
+   FnPortDn;
+   fnPortA := a;
+   PortNm(pn);
    quiet := true;
-   row := 'Speed changed.';
+   row := concat('Now using ', concat(pn, '.'));
    Head(row);
-   row := 'The FujiNet must be set to the same speed: on its SD card, in';
+   row := concat('Plug the FujiNet into ', concat(pn, ' (no null-modem adapter).'));
    AddLine(row);
-   row := 'fnconfig.ini under [Serial], set baud= to this number, then';
+   row := concat('Lisa: Preferences, Connect Devices, ', concat(pn, ' Connector set'));
    AddLine(row);
-   row := 'restart the FujiNet.  Press A to test.';
+   row := 'to Serial Cable.  Press A to test.  LisaFuji remembers the port.';
    AddLine(row);
+   if not FnCfgSv(myVol, curBaud) then begin      { REV S }
+      row := 'FNSPEED.DATA could not be written: the choice lasts until you quit.';
+      AddLine(row)
+   end;
+   quiet := false;
+   DrawShow
+end;
+
+procedure SetSpeed (baud : longint);
+{ REV S: the Speed menu sets the FujiNet too.  FnSetBd posts the new     }
+{ speed to the adapter's own web page (the form a browser would use),    }
+{ presses its Reset button, and opens the port again at the new speed.   }
+{ The choice, with the port, is kept in FNSPEED.DATA beside the tool so  }
+{ LisaFuji opens the same way next time.                                  }
+var row   : StatStr;
+    part  : Str255;
+    big   : Str255;
+    rc    : integer;
+    stage : integer;
+    ok    : boolean;
+begin
+   promptOn := false;
+   FnNum(baud, part);
+   if baud = curBaud then begin
+      big := concat('Already at ', concat(part, ' baud.  Press A to test.'));
+      SetBig(big);
+      exit(SetSpeed)
+   end;
+   quiet := true;
+   row := concat('Changing to ', concat(part, ' baud ...'));
+   Head(row);
+   row := 'Telling the FujiNet through its web page, restarting it, then';
+   AddLine(row);
+   row := 'opening the port at the new speed.  About 20 seconds.';
+   AddLine(row);
+   quiet := false;
+   DrawShow;
+   rc := FnSetBd(curBaud, baud, stage);
+   if stage >= 4 then
+      curBaud := baud;                  { the FujiNet was told, or is there already }
+   ok := FnCfgSv(myVol, curBaud);
+   quiet := true;
+   if (rc = fnOK) and (stage = 7) then begin
+      row := concat('The FujiNet was already at ', concat(part, ' baud; LisaFuji follows.'));
+      Head(row);
+      row := 'It did not answer at the old speed, but does at this one.  LisaFuji'
+   end
+   else if rc = fnOK then begin
+      row := concat('Speed changed: ', concat(part, ' baud at both ends.'));
+      Head(row);
+      row := 'The FujiNet restarted at the new speed and answers.  It keeps the';
+      AddLine(row);
+      row := 'speed on its SD card; LisaFuji'
+   end
+   else if stage <= 3 then begin
+      row := 'The FujiNet was not changed.';
+      Head(row);
+      if stage = 1 then begin
+         FnNum(fnEcode, part);
+         row := concat('The port would not open (ecode ', concat(part, ').  Press W for the wiring.'))
+      end
+      else if stage = 2 then
+         row := 'It gave no address: is it powered, answering (A), and on the WiFi?'
+      else
+         row := 'Its web page did not take the new speed.  Is its WiFi up?';
+      AddLine(row);
+      row := 'By hand: on its SD card, in fnconfig.ini under [Serial], set baud=,';
+      AddLine(row);
+      row := 'restart the FujiNet, then choose the speed here again.'
+   end
+   else begin
+      row := concat('The FujiNet is now at ', concat(part, ' baud; LisaFuji follows.'));
+      Head(row);
+      if stage = 5 then begin
+         FnNum(fnEcode, part);
+         row := concat('The port would not open again (ecode ', concat(part, ').'))
+      end
+      else
+         row := 'It does not answer yet: it may still be restarting.';
+      AddLine(row);
+      row := 'Wait a moment and press A to test.'
+   end;
+   if rc = fnOK then
+      row := concat(row, ' keeps it in FNSPEED.DATA.');
+   AddLine(row);
+   if not ok then begin
+      row := 'FNSPEED.DATA could not be written: the choice lasts until you quit.';
+      AddLine(row)
+   end;
    quiet := false;
    DrawShow
 end;
@@ -2385,6 +2503,42 @@ begin
       IsShow
 end;
 
+procedure IsTime;
+{ REV Q.  Z on the map page: draw the map 10 times line by line (the    }
+{ old MapDraw) and 10 times in bands (MapDrawB); the seconds of each go  }
+{ on the last line, then the page is drawn again cleanly.                }
+var t0, t1, t2 : longint;
+    ok         : boolean;
+    i          : integer;
+    a, b       : Str255;
+    big        : Str255;
+    row        : StatStr;
+begin
+   if myWindow = nil then
+      exit(IsTime);
+   SetPort(myWindow);
+   t0 := FnSecs(ok);
+   for i := 1 to 10 do
+      MapDraw(44, 40);
+   t1 := FnSecs(ok);
+   for i := 1 to 10 do
+      MapDrawB(44, 40);
+   t2 := FnSecs(ok);
+   if ok then begin
+      FnNum(t1 - t0, a);
+      FnNum(t2 - t1, b);
+      big := concat('Map drawn 10 times:  line by line ', a);
+      big := concat(big, concat(' s,  in bands ', concat(b, ' s')));
+      Clip(big, row)
+   end
+   else
+      row := 'Z: the Lisa clock is not set, so there is nothing to time by.';
+   quiet := true;
+   SetLast(row);
+   quiet := false;
+   DrawShow
+end;
+
 procedure IsKey (ch : char);
 { Keys on the station (isMode 2), crew (3) and weather (4) pages. }
 begin
@@ -2410,6 +2564,8 @@ begin
       else
          IsShow
    end
+   else if ((ch = 'Z') or (ch = 'z')) and isMapOn then
+      IsTime                               { REV Q: time the map drawing }
    else if (isMode = 3) and ((ch = 'N') or (ch = 'n') or (ch = ' ')) then begin
       if mrRCnt > crPer then begin
          mrPage := mrPage + 1;
@@ -2695,6 +2851,8 @@ begin
          case item of
             mi9600  : SetSpeed(9600);
             mi19200 : SetSpeed(19200);
+            miPortA : UsePort(true);         { REV R }
+            miPortB : UsePort(false);
          end;
 
       mHelp :
@@ -2876,6 +3034,7 @@ begin
    IsInit;
    MrInit;                             { REV O: the crew and weather pages }
    if IsLoad(myVol) then ;             { REV J: your town, if HOMETOWN.DATA is there }
+   if FnCfgLd(myVol, curBaud) then ;   { REV S: the speed and port last used, if FNSPEED.DATA is there }
 
    InitMP(theHeap, myPrefix, @AlertFailed, alertVerNum,
           @myMenus[mFile], allAlerts, err);

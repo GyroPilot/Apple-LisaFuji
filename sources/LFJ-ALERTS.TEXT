@@ -58,7 +58,7 @@ Put your documents away one at a time, or press the on-off button to
 save them all.
 
 11 note alert
-LisaFuji 1.1   (17 October 2026)^L^L
+LisaFuji 1.2 beta   (18 October 2026)^L^L
 News, Wikipedia, space station, network clock and test tool for an RS-232
 FujiNet on Serial B.  The News menu reads the FujiNet news service; the Wiki
 menu searches and reads Wikipedia; the Space menu shows the space station
@@ -122,6 +122,9 @@ Set the Lisa Clock from the Network .../C
 Speed
 Use 9600 baud
 Use 19200 baud
+-
+Use Serial A
+Use Serial B
 
 8
 Help

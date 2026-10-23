@@ -1,4 +1,4 @@
-LisaFuji 1.1 (REV P) -- what is here and how to build it
+LisaFuji 1.2 beta (REV S) -- what is here and how to build it
 
 sources/LFJ-MAIN.TEXT     the program: pages, keys, menus, the event loop; in three code segments
 sources/LFJ-GLOBALS.TEXT  unit LfjGlobals: constants, menu numbers, state, the Filer handshake

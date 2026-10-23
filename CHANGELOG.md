@@ -1,5 +1,16 @@
 # LisaFuji changelog
 
+## 1.2 beta REV S -- 22 Oct 2026 -- tested on the Lisa 2/10 at 19200 baud (22 Oct)
+- The Speed menu sets the FujiNet too: a form POST of serial_baud= to the adapter's own web page through its N:
+  device (the RS-232 FujiNet has no speed command), then its Reset button, then the port again at the new speed and
+  the ready test. The choice and the port are kept in FNSPEED.DATA beside the tool. An adapter that does not answer
+  at the old speed is taken to be at the new one already. FnBus: FnPost, FnSetBd, FnCfgSv, FnCfgLd.
+- PCFuji REV D: HTTP POST/PUT on the N: unit and a stand-in for the adapter's /config page (serial_baud= stored,
+  resetfuji= makes it silent for 3 s and reopens a real serial line at the new speed).
+## 1.2 beta REV R -- 19 Oct 2026
+- The FujiNet on Serial A or Serial B (Speed menu: Use Serial A / Use Serial B).
+## 1.2 beta REV Q -- 19 Oct 2026
+- The world map drawn in bands (Z times it).
 ## 1.1 REV P -- 17-19 Oct 2026 -- RELEASE, tested on the Lisa 2/10 (19 Oct)
 - The weather page draws a picture for each day and a big one for now (sun, moon, clouds, rain, snow, storm, fog),
   with QuickDraw shapes only.

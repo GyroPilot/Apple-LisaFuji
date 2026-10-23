@@ -10,6 +10,8 @@
 #
 #   FujiNet ready     512 letter A's
 #   adapter config    "PC-STAND-IN", this PC's name and address
+#   web page /config  (REV D) serial_baud= is stored, resetfuji= restarts: what
+#                     LisaFuji's Speed menu posts.  Other POSTs go out for real.
 #   WiFi status       connected
 #   clock             this PC's date and time
 #   network unit N1   OPEN really fetches the web address (HTTP or HTTPS)
@@ -34,9 +36,9 @@
 #        python3 PCFuji.py --lisaem        LisaEm, Serial B set to TelnetD (port 9300)
 #        python3 PCFuji.py --lisaem 9301   LisaEm, Serial A set to TelnetD
 # Stop:  Ctrl-C.
-import sys, time, socket, datetime, urllib.request, urllib.error, re
+import sys, time, socket, datetime, urllib.request, urllib.error, urllib.parse, re
 
-VERSION = "PCFuji REV C"
+VERSION = "PCFuji REV D"
 END, ESC, ESC_END, ESC_ESC = 0xC0, 0xDB, 0xDC, 0xDD
 ACK, NAK = 0x06, 0x15
 FIELD_BYTES = [0, 1, 2, 3, 4, 2, 4, 4]      # parameter bytes for descriptor 0..7
@@ -96,6 +98,9 @@ class SerialLine:
     def write(self, data):
         self.s.write(data)
         self.s.flush()
+
+    def reopen(self, baud):
+        self.s.baudrate = baud
 
 
 class TcpLine:
@@ -210,6 +215,14 @@ class Fuji:
         self.pos = 0
         self.status = 0
         self.failed = False
+        self.method = "GET"          # REV D: a POST or PUT waits for the first STATUS in body mode
+        self.chan = 0                # SET_HTTP_MODE: 0 body, 4 post data
+        self.post = b""
+        self.spec = ""
+        self.pending = False
+        self.dead_until = 0.0        # restarting: no answer until then
+        self.baud = 9600             # the stored speed, as fnconfig.ini holds it
+        self.restart = False         # main loop: reopen a serial line at self.baud
 
     def my_address(self):
         try:
@@ -256,8 +269,59 @@ class Fuji:
             say("   could not reach the server: %s" % e)
             return b"", 207
 
+    def web_config(self, body):
+        """The FujiNet's /config form, the two fields LisaFuji uses: serial_baud= is stored (it takes
+        effect at the next start, as on the real one); resetfuji= restarts: silent for 3 seconds, then
+        back at the stored speed."""
+        fields = urllib.parse.parse_qs(body)
+        if "serial_baud" in fields:
+            self.baud = int(fields["serial_baud"][0])
+            say("   web page /config: serial_baud=%d saved (used from the next restart)" % self.baud)
+        if "resetfuji" in fields:
+            say("   web page /config: Reset FujiNet -> silent for 3 s, then back at %d baud" % self.baud)
+            self.dead_until = time.time() + 3
+            self.restart = True
+        if not fields:
+            say("   web page /config: empty form")
+
+    def transact(self):
+        """The first STATUS in body mode sends a POST or PUT: to this PC's own web page when the
+        address is ours (the FujiNet's /config form), otherwise for real."""
+        self.pending = False
+        url = re.sub(r"^[Nn]\d?:", "", self.spec.strip())
+        m = re.match(r"^([A-Za-z]+)://([^/]*)(/.*)?$", url)
+        if not m or m.group(1).lower() not in ("http", "https"):
+            say("   only HTTP and HTTPS are handled here; answering status 207")
+            self.data, self.status, self.failed, self.pos = b"", 207, True, 0
+            return
+        host, path = m.group(2), m.group(3) or "/"
+        mine = ".".join(str(x) for x in self.my_address())
+        if host.split(":")[0] in (mine, "127.0.0.1", "localhost") and path == "/config":
+            self.web_config(self.post.decode("latin1"))
+            self.data, self.status, self.failed, self.pos = b"", 1, False, 0
+            return
+        req = urllib.request.Request(m.group(1).lower() + "://" + host + path, data=self.post,
+                                     method=self.method,
+                                     headers={"User-Agent": "PCFuji/D (LisaFuji test)",
+                                              "Content-Type": "application/x-www-form-urlencoded"})
+        say("   %s %s, %d bytes of data" % (self.method, host + path, len(self.post)))
+        try:
+            with urllib.request.urlopen(req, timeout=OPEN_TIMEOUT) as r:
+                self.data, self.status = r.read(), 1
+        except urllib.error.HTTPError as e:
+            self.data, self.status = (e.read() if e.fp else b""), 170
+            say("   the server answered HTTP %d" % e.code)
+        except Exception as e:
+            self.data, self.status = b"", 207
+            say("   could not reach the server: %s" % e)
+        self.failed = self.status != 1
+        self.pos = 0
+
     def handle(self, pkt):
         """One request packet in, one reply frame out (or None = stay silent)."""
+        if time.time() < self.dead_until:
+            say("   (restarting: no answer, as the real one)")
+            return None
         if len(pkt) < 6:
             say("?? %d-byte packet, too short: no reply (as the FujiNet does)" % len(pkt))
             return None
@@ -300,6 +364,14 @@ class Fuji:
                     say("?? OPEN without its two parameters: a real FujiNet would restart")
                     return None
                 spec = payload.split(b"\0")[0].decode("latin1")
+                mode = params[0]
+                if mode in (8, 12, 13, 14):               # REV D: write, both, POST, PUT with headers
+                    self.method = "POST" if mode in (13, 14) else "PUT"
+                    self.spec, self.pending, self.chan, self.post = spec, True, 0, b""
+                    self.data, self.status, self.pos, self.is_open, self.failed = b"", 1, 0, True, False
+                    say("<- OPEN mode %d (%s) %s" % (mode, self.method, spec))
+                    say("   -> ACK; the request goes out on the first STATUS in body mode")
+                    return make_reply(dev, ACK)
                 say("<- OPEN %s" % spec)
                 self.data, self.status = self.fetch(spec)
                 self.pos, self.is_open = 0, True
@@ -308,6 +380,8 @@ class Fuji:
                     % (self.status, len(self.data), sum(self.data) % 65536))
                 return make_reply(dev, ACK)
             if cmd == 0x53:
+                if self.pending and self.chan == 0:
+                    self.transact()
                 left = len(self.data) - self.pos
                 st = self.status
                 if self.is_open and left == 0 and st == 1:
@@ -332,11 +406,27 @@ class Fuji:
                 say("<- READ %-3d                  -> %d bytes (%d left)" % (n, len(chunk), left - n))
                 return make_reply(dev, ACK, chunk)
             if cmd == 0x57:
+                if self.is_open and (self.chan == 4 or (self.chan == 0 and self.pending and self.method == "PUT")):
+                    self.post += payload
+                    say("<- WRITE %d bytes            -> ACK (post data, %d so far)" % (len(payload), len(self.post)))
+                    return make_reply(dev, ACK)
                 say("<- WRITE %d bytes            -> ACK (thrown away here)" % len(payload))
+                return make_reply(dev, ACK)
+            if cmd == 0x4D:
+                if npar < 2:
+                    say("?? SET_HTTP_MODE without its two parameters -> NAK")
+                    return make_reply(dev, NAK)
+                if not self.is_open:
+                    say("<- SET_HTTP_MODE %d on a closed unit -> NAK" % params[1])
+                    return make_reply(dev, NAK)
+                self.chan = params[1]
+                names = {0: "body", 1: "collect headers", 2: "read headers", 3: "write headers", 4: "write post data"}
+                say("<- SET_HTTP_MODE %d            -> ACK (%s)" % (self.chan, names.get(self.chan, "?")))
                 return make_reply(dev, ACK)
             if cmd == 0x43:
                 was_failed = self.failed
                 self.is_open, self.data, self.pos, self.status, self.failed = False, b"", 0, 0, False
+                self.pending, self.chan, self.post, self.method = False, 0, b"", "GET"
                 say("<- CLOSE                     -> %s" % ("NAK (as the FujiNet does after a failure)"
                                                             if was_failed else "ACK"))
                 return make_reply(dev, NAK if was_failed else ACK)
@@ -377,6 +467,8 @@ def main():
         print("Cable: Lisa Serial B, WITH the null-modem adapter, to this PC.")
     print("On the Lisa: open LisaFuji and press A.  Ctrl-C here to stop.\n")
     fuji = Fuji()
+    if isinstance(line, SerialLine):
+        fuji.baud = line.s.baudrate
     buf, in_frame, esc, stray = bytearray(), False, False, 0
     try:
         while True:
@@ -388,6 +480,11 @@ def main():
                         reply = fuji.handle(bytes(buf))
                         if reply:
                             line.write(reply)
+                        if fuji.restart:                  # REV D: the pretend restart
+                            fuji.restart = False
+                            if isinstance(line, SerialLine):
+                                line.reopen(fuji.baud)
+                                say("   serial line now at %d baud" % fuji.baud)
                         buf, in_frame, esc = bytearray(), False, False
                     else:
                         in_frame, esc, buf = True, False, bytearray()

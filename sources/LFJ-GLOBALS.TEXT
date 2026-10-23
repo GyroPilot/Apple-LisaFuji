@@ -65,7 +65,7 @@ uses (*$U UnitStd.obj *)   UnitStd,
      (*$U FilerComm.obj *) FilerComm;
 
 const
-   lfjVersion = 'LisaFuji 1.1';
+   lfjVersion = 'LisaFuji 1.2 beta';     { REV Q: the map in bands; Z times it }
 
    winW = 600;                { the status window (LisaFileMover's size) }
    winH = 300;
@@ -143,6 +143,9 @@ const
    mSpeed = 7;                { "Speed" }
       mi9600  = 1;            { Use 9600 baud }
       mi19200 = 2;            { Use 19200 baud }
+      { 3 is a separator }
+      miPortA = 4;            { REV R: Use Serial A }
+      miPortB = 5;            {        Use Serial B }
 
    mHelp = 8;                 { "Help" }
       miHelpUse  = 1;         { How to Use/H }

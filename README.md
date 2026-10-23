@@ -10,8 +10,12 @@ System 3.1.
 ## Status
 
 - **1.0** -- tested on a Lisa 2/10 with a real FujiNet, 17 October 2026 (`releases/LISAFUJI_1_0.dc42`).
-- **1.1** -- who is aboard (P), the weather in your town with pictures (O), the Weather menu. Built and tested in
-  LisaEm; waiting for its check on the 2/10 (`releases/LISAFUJI_1_1_TEST.dc42`). The sources here are 1.1 (REV P).
+- **1.1** -- who is aboard (P), the weather in your town with pictures (O), the Weather menu. Tested on the 2/10,
+  19 October 2026 (`releases/LISAFUJI_1_1.dc42`).
+- **1.2 beta** -- the Speed menu sets the FujiNet too: Use 19200 baud posts the new speed to the adapter's own web
+  page through the FujiNet's network device, restarts it and follows it (no more editing the SD card). The choice,
+  with the port (Serial A or Serial B, new as well), is kept in FNSPEED.DATA beside the tool. Tested on the 2/10 at
+  19200 baud, 22 October 2026 (`releases/LISAFUJI_1_2.dc42`). The sources here are 1.2 beta (REV S).
 
 ## Using it
 
@@ -29,7 +33,10 @@ Open LisaFuji; every key is on the start page:
 | A, 1-3 | the link tests: FujiNet ready, adapter and WiFi, network clock |
 | F, B | fetch a web file; show the last bytes sent and received |
 
-Speed menu: 9600 (start here) or 19200; it must match the FujiNet's own setting.
+Speed menu: Use 9600 baud / Use 19200 baud sets BOTH ends: LisaFuji tells the FujiNet through its own web page (so
+the adapter's WiFi must be up), restarts it and opens the port again at the new speed, about 20 seconds in all. Use
+Serial A / Use Serial B picks the port. Both choices are kept in FNSPEED.DATA beside the tool. A new adapter runs at
+whatever its fnconfig.ini says (9600 as shipped for the Lisa): start there and choose 19200 once.
 
 **Hardware:** a FujiNet for RS-232 (FutureVision Research) on Serial B with a straight serial cable (the FujiNet is
 wired like a modem: no null modem). No FujiNet? `tools/PCFuji.py` stands in for one on a Windows, macOS or Linux computer with a USB-serial adapter
