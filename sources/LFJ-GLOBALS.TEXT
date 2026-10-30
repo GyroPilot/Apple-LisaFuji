@@ -65,7 +65,7 @@ uses (*$U UnitStd.obj *)   UnitStd,
      (*$U FilerComm.obj *) FilerComm;
 
 const
-   lfjVersion = 'LisaFuji 1.2 beta';     { REV Q: the map in bands; Z times it }
+   lfjVersion = 'LisaFuji 1.2';          { REV Z: 1.2 = REV Y (the ESProFile mailbox route) }
 
    winW = 600;                { the status window (LisaFileMover's size) }
    winH = 300;

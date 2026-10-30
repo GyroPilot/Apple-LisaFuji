@@ -1,8 +1,8 @@
-LisaFuji 1.2 beta (REV U) -- what is here and how to build it
+LisaFuji 1.2 (REV Z) -- what is here and how to build it
 
 sources/LFJ-MAIN.TEXT     the program: pages, keys, menus, the event loop; in three code segments
 sources/LFJ-GLOBALS.TEXT  unit LfjGlobals: constants, menu numbers, state, the Filer handshake
-sources/LFJ-FNBUS.TEXT    unit FnBus: Serial B and the FujiBus protocol (SLIP frames) to the FujiNet
+sources/LFJ-FNBUS.TEXT    unit FnBus: Serial B and the FujiBus protocol (SLIP frames) to the FujiNet, or the ESPFuji mailbox file
 sources/LFJ-TWUNIT.TEXT   unit TwcUnit: the twin-year clock (shared with LisaTwinClock)
 sources/LFJ-MAP.TEXT      unit LfjMap: the world map as run-length rows (made by tools/make_map.py)
 sources/LFJ-ISS.TEXT      unit LfjIss: the space station page, your town, HOMETOWN.DATA (Lisa Pascal reals)

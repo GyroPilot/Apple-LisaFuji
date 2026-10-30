@@ -1,5 +1,14 @@
 # LisaFuji changelog
 
+## 1.2 REV V-Z -- 27-30 Oct 2026 -- RELEASE 1.2 (REV Z = REV Y with the version shown as 1.2)
+- The ESProFile mailbox as a third back end, inside FnBus (fnVia): a MAILBOX.DATA file on the tool's own volume is an
+  ESPFuji drive; requests go into the file and the drive answers in it. Found at launch (FnMbUp), so the header reads
+  "the ESProFile" from the first line; no baud rate shown then. (REV V-X)
+- A failed fetch says why: "no MAILBOX.DATA on -#13- (ec 948): put LisaFuji beside the ESPFuji tool" (a 2/10 has two
+  windows both named ProFile) or "mailbox did not answer: ESPFuji?". COPY past the end of a short string returns ''
+  on the Lisa, so every truncation is guarded. (REV W-X)
+- Home page line 1 says "through the ESProFile" when the mailbox is in use; P on page 1 steps back out: a news
+  article to its headlines, a headline list to the categories, a Wikipedia article to the results. (REV Y)
 ## 1.2 beta REV U -- 23 Oct 2026 -- the 1.2 beta release floppy (REV T tested on the 2/10, 23 Oct)
 - The speed page's FNSPEED.DATA note is its own line (REV T joined it onto a 70-character line: 96 characters into an
   80-character string, which the Lisa does not range-check, so it drew off the window). The Speed menu probes for the

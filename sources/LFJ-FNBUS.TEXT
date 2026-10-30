@@ -51,6 +51,10 @@ unit FnBus;
 { comment in the implementation: the one unit layout already proven on  }
 { the Lisa (LFU-UNIT).  FnDCp and FnDSz are helpers, not for callers.   }
 {                                                                        }
+{ REV V  27-Oct-2026  The ESPFuji mailbox as a second back end: fnVia.  }
+{                      MAILBOX.DATA on the tool's volume + HELLO at launch }
+{                      (FnFind); OPEN/READ/CLOSE map onto the drive's     }
+{                      requests; no page buffer (fnWire/fnPkt reused).     }
 { PORT CODE.  FnPortUp is LISACom 1.7's PortUp, call for call (MOUNT,   }
 { the DEVICE_CONTROL set-up block, typeahead 1024/341/683, OPEN),       }
 { proven on the 2/10.  Received bytes are taken in pieces of at most    }
@@ -96,6 +100,13 @@ const
    fnWirMax = 540;            { room for an escaped frame going out }
    fnOutMax = 256;            { payload bytes a caller can send }
    fnTxMax  = 24;             { bytes of the last frame sent kept for show }
+   { REV V: the ESPFuji mailbox as a second back end }
+   fnViaSer = 0;              { fnVia: the serial FujiNet (or PCFuji) }
+   fnViaMb  = 1;              { fnVia: an ESProFile running ESPFuji, through MAILBOX.DATA }
+   fnMbPgs  = 256;            { pages in MAILBOX.DATA }
+   fnMbPayl = 492;            { payload bytes in a mailbox page }
+   fnMbWait = 40000;          { ms a mailbox reply may take (the drive fetches the whole page first) }
+   fnMbProb = 3000;           { ms for the HELLO probe at launch }
 
 type
    FnByte = -128..127;
@@ -128,6 +139,17 @@ var
    fnStMs   : longint;        { wait for a STATUS reply: fnTmo, or fnTmoOp right after an OPEN }
    fnConn   : integer;        { connected flag, from the last STATUS }
    fnStat   : integer;        { status code, from the last STATUS }
+   fnVia    : integer;        { REV V: fnViaSer or fnViaMb }
+   fnVol    : E_Name;         { REV V: the tool's volume (FnSetVol): where MAILBOX.DATA is looked for }
+   fnMbIsUp : boolean;        { REV V: MAILBOX.DATA is open }
+   fnMbRef  : integer;        { REV V: its refnum }
+   fnMbSeq  : integer;        { REV V: sequence number of the last request }
+   fnMbNext : integer;        { REV V: the next page to touch (requests and polls both advance it) }
+   fnMbOff  : longint;        { REV V: bytes of the open page already read }
+   fnMbTot  : longint;        { REV V: bytes the drive holds for the open page }
+   fnMbEc   : integer;        { REV V: OS ecode of the last failed mailbox call }
+   fnMbRnd  : integer;        { REV V: reads it took to see the last reply (for show) }
+   fnMbWhy  : string[80];     { REV V: the drive's ERROR text }
 
 procedure FnInit;
 function  FnPortUp (baud : longint) : boolean;
@@ -162,6 +184,12 @@ function  FnCfgSv  (var vol : E_Name; baud : longint) : boolean;
 function  FnCfgLd  (var vol : E_Name; var baud : longint) : boolean;
 function  FnFind   (var baud : longint) : integer;
 procedure FnSpdMsg (rc, stage : integer; baud : longint; var msg : Str255);
+procedure FnSetVol (var vol : E_Name);
+function  FnMbUp   : boolean;
+procedure FnMbDn;
+function  FnMbAsk  (var req : Str255; waitMs : longint) : integer;
+procedure FnMbTxt  (var s : Str255);
+function  FnMbVal  (var s : Str255; var at : integer) : longint;
 procedure FnNum    (n : longint; var txt : Str255);
 procedure FnHex    (v : integer; var txt : Str255);
 
@@ -198,7 +226,231 @@ begin
    fnStat   := 0;
    fnPortA  := false;         { REV R }
    fnFound  := false;         { phase 2 }
+   fnVia    := fnViaSer;      { REV V }
+   fnVol    := '';
+   fnMbIsUp := false;
+   fnMbRef  := 0;
+   fnMbSeq  := 0;
+   fnMbNext := 0;
+   fnMbOff  := 0;
+   fnMbTot  := 0;
+   fnMbEc   := 0;
+   fnMbRnd  := 0;
+   fnMbWhy  := '';
    fnPnp    := '-RS232B'
+end;
+
+{------------------------------------------------------------------------}
+{ REV V: the ESPFuji mailbox.  A request is a signed 512-byte page       }
+{ written into MAILBOX.DATA; the drive answers on the pages read after   }
+{ it.  The page buffer is fnWire (idle while the mailbox is in use) and  }
+{ the reply payload lands in fnPkt at fnOff, where serial replies land,  }
+{ so FnPlB, FnPlStr and fnPlLen work unchanged.  Port of EFJ-MBOX REV C. }
+{------------------------------------------------------------------------}
+
+procedure FnSetVol {var vol : E_Name};
+{ The volume MAILBOX.DATA is looked for on (the tool's own). }
+begin
+   fnVol := vol
+end;
+
+procedure FnWrPut (i, v : integer);
+{ Byte i of the mailbox page (fnWire) from 0..255. }
+begin
+   if v > 127 then v := v - 256;
+   fnWire[i] := v
+end;
+
+function FnWrGet (i : integer) : integer;
+{ Byte i of the mailbox page as 0..255. }
+var b : integer;
+begin
+   b := fnWire[i];
+   if b < 0 then b := b + 256;
+   FnWrGet := b
+end;
+
+function FnMbUp : boolean;
+{ Open MAILBOX.DATA on fnVol if it is there (it is NOT created here: the  }
+{ ESPFuji tool makes it), then HELLO with a short wait.  TRUE: an ESPFuji }
+{ answered and fnVia is fnViaMb.  FALSE: fnVia stays as it was.           }
+var path     : Pathname;
+    ec, e2   : integer;
+    schedErr : integer;
+    req      : Str255;
+begin
+   FnMbUp := false;
+   if fnVia = fnViaMb then begin
+      FnMbUp := true;
+      exit(FnMbUp)
+   end;
+   if length(fnVol) = 0 then
+      exit(FnMbUp);
+   if not fnMbIsUp then begin
+      path := concat(fnVol, 'MAILBOX.DATA');
+      Sched_Class(schedErr, false);
+      OPEN(ec, path, fnMbRef, [DRead, DWrite]);
+      Sched_Class(schedErr, true);
+      if ec > 0 then begin
+         fnMbEc := ec;
+         exit(FnMbUp)
+      end;
+      fnMbIsUp := true
+   end;
+   req := 'HELLO';
+   if FnMbAsk(req, fnMbProb) = fnOK then begin
+      fnVia := fnViaMb;
+      fnFound := true;
+      FnMbUp := true
+   end
+   else begin
+      CLOSE_OBJECT(e2, fnMbRef);
+      fnMbIsUp := false
+   end
+end;
+
+procedure FnMbDn;
+{ Close MAILBOX.DATA (at quit). }
+var e : integer;
+begin
+   if fnMbIsUp then begin
+      CLOSE_OBJECT(e, fnMbRef);
+      fnMbIsUp := false
+   end;
+   fnVia := fnViaSer
+end;
+
+function FnMbAsk {var req : Str255; waitMs : longint} : integer;
+{ Write the request on the next page, then read the pages after it until }
+{ the reply with this sequence number comes back (waitMs at most).  The   }
+{ payload is left in fnPkt at fnOff (fnPlLen bytes).  fnOK; fnNakd when  }
+{ the drive said ERROR (fnMbWhy); fnNoRep; fnPortEr on an OS error.       }
+var i, n, r, j : integer;
+    ec         : integer;
+    schedErr   : integer;
+    did        : longint;
+    waited     : longint;
+    where      : longint;
+    tmp        : Str255;
+begin
+   FnMbAsk := fnPortEr;
+   fnPlLen := 0;
+   fnOff := 6;
+   if not fnMbIsUp then
+      exit(FnMbAsk);
+   fnMbSeq := fnMbSeq + 1;
+   if fnMbSeq > 30000 then fnMbSeq := 1;
+   n := length(req);
+   if n > fnMbPayl then n := fnMbPayl;
+   for i := 0 to 511 do
+      fnWire[i] := 0;
+   fnWire[0] := ord('L');
+   fnWire[1] := ord('I');
+   fnWire[2] := ord('S');
+   fnWire[3] := ord('A');
+   fnWire[4] := ord('F');
+   fnWire[5] := ord('U');
+   fnWire[6] := ord('J');
+   fnWire[7] := ord('I');
+   FnWrPut(9, 1);                       { version }
+   FnWrPut(10, fnMbSeq div 256);
+   FnWrPut(11, fnMbSeq mod 256);
+   FnWrPut(13, 1);                      { a request }
+   FnWrPut(14, n div 256);
+   FnWrPut(15, n mod 256);
+   for i := 1 to n do
+      FnWrPut(19 + i, ord(req[i]));
+   r := fnMbNext;
+   fnMbNext := (fnMbNext + 1) mod fnMbPgs;
+   where := r;
+   where := where * 512;
+   Sched_Class(schedErr, false);
+   WRITE_DATA(ec, fnMbRef, ord4(@fnWire), 512, did, absolute, where);
+   Sched_Class(schedErr, true);
+   if (ec > 0) or (did <> 512) then begin
+      fnMbEc := ec;
+      exit(FnMbAsk)
+   end;
+   Sched_Class(schedErr, false);
+   FLUSH(ec, fnMbRef);                  { in case the OS held the page }
+   Sched_Class(schedErr, true);
+   fnCalls := fnCalls + 1;
+   waited := 0;
+   fnMbRnd := 0;
+   FnMbAsk := fnNoRep;
+   while waited < waitMs do begin
+      for j := 1 to 3 do begin
+         fnMbRnd := fnMbRnd + 1;
+         where := fnMbNext;            { a page the OS has not cached }
+         fnMbNext := (fnMbNext + 1) mod fnMbPgs;
+         where := where * 512;
+         Sched_Class(schedErr, false);
+         READ_DATA(ec, fnMbRef, ord4(@fnWire), 512, did, absolute, where);
+         Sched_Class(schedErr, true);
+         if (ec > 0) or (did <> 512) then begin
+            fnMbEc := ec;
+            FnMbAsk := fnPortEr;
+            exit(FnMbAsk)
+         end;
+         if (fnWire[0] = ord('L')) and (fnWire[1] = ord('I')) and (fnWire[7] = ord('I')) then
+            if (FnWrGet(13) = 2) and (FnWrGet(12) = 0) then
+               if FnWrGet(10) * 256 + FnWrGet(11) = fnMbSeq then begin
+                  fnPlLen := FnWrGet(14) * 256 + FnWrGet(15);
+                  if fnPlLen > fnMbPayl then fnPlLen := fnMbPayl;
+                  for i := 0 to fnPlLen - 1 do
+                     fnPkt[fnOff + i] := fnWire[20 + i];
+                  fnLen := fnOff + fnPlLen;
+                  FnMbAsk := fnOK;
+                  if fnPlLen >= 6 then
+                     if (FnPlB(0) = 69) and (FnPlB(1) = 82) and (FnPlB(2) = 82) then begin
+                        FnMbTxt(tmp);                    { ERROR ... }
+                        n := length(tmp);
+                        if n > 80 then n := 80;
+                        if n = 0 then fnMbWhy := '' else fnMbWhy := copy(tmp, 1, n);
+                        FnMbAsk := fnNakd
+                     end;
+                  exit(FnMbAsk)
+               end
+      end;
+      FnNap(250);
+      waited := waited + 250
+   end
+end;
+
+procedure FnMbTxt {var s : Str255};
+{ The last reply as a string (at most 255 characters; control bytes as spaces). }
+var i, n, b : integer;
+    one     : string[1];
+begin
+   s := '';
+   one := ' ';
+   n := fnPlLen;
+   if n > 255 then n := 255;
+   for i := 0 to n - 1 do begin
+      b := FnPlB(i);
+      if (b < 32) or (b > 126) then b := 32;
+      one[1] := chr(b);
+      s := concat(s, one)
+   end
+end;
+
+function FnMbVal {var s : Str255; var at : integer} : longint;
+{ The number at s[at] (skipping blanks); at is left after it. }
+var v : longint;
+    c : integer;
+begin
+   v := 0;
+   while (at <= length(s)) and (s[at] = ' ') do at := at + 1;
+   while at <= length(s) do begin
+      c := ord(s[at]);
+      if (c < 48) or (c > 57) then begin
+         FnMbVal := v;
+         exit(FnMbVal)
+      end;
+      v := v * 10 + (c - 48);
+      at := at + 1
+   end;
+   FnMbVal := v
 end;
 
 function FnGetB {i : integer} : integer;
@@ -360,6 +612,13 @@ var vol : E_Name;
     pw  : E_Name;
     dev : E_Name;
 begin
+   if fnVia = fnViaMb then begin        { REV V: no serial port on the mailbox path }
+      fnUp := true;
+      fnIsOpen := false;
+      fnWait := 0;
+      FnPortUp := true;
+      exit(FnPortUp)
+   end;
    if fnUp then begin
       FnPortUp := true;
       exit(FnPortUp)
@@ -400,6 +659,10 @@ end;
 procedure FnPortDn;
 var e : integer;
 begin
+   if fnVia = fnViaMb then begin        { REV V: the mailbox stays open until FnMbDn }
+      fnUp := false;
+      exit(FnPortDn)
+   end;
    if fnUp then begin
       CLOSE_OBJECT(e, fnRef);
       fnUp := false
@@ -751,7 +1014,13 @@ end;
 function FnReady : integer;
 { Device-ready test: the FujiNet answers with 512 letter A's. }
 var rc, i : integer;
+    req   : Str255;
 begin
+   if fnVia = fnViaMb then begin        { REV V: HELLO }
+      req := 'HELLO';
+      FnReady := FnMbAsk(req, fnMbWait);
+      exit(FnReady)
+   end;
    rc := FnCall(fnDFuji, 0, 0, 0, 0, 0, fnTmo);
    if rc = fnOK then begin
       if fnPlLen <> 512 then
@@ -767,8 +1036,22 @@ end;
 function FnWifi {var st : integer} : integer;
 { WiFi status byte: 3 = connected, 6 = disconnected. }
 var rc : integer;
+    req : Str255;
+    i   : integer;
 begin
    st := 0;
+   if fnVia = fnViaMb then begin        { REV V: WIFI -> "ssid X status connected ip ..." }
+      req := 'WIFI';
+      rc := FnMbAsk(req, fnMbWait);
+      if rc = fnOK then begin
+         FnMbTxt(req);
+         st := 6;
+         i := pos('status connected', req);
+         if i > 0 then st := 3
+      end;
+      FnWifi := rc;
+      exit(FnWifi)
+   end;
    rc := FnCall(fnDFuji, 250, 0, 0, 0, 0, fnTmo);       { FA }
    if rc = fnOK then begin
       if fnPlLen < 1 then
@@ -796,6 +1079,8 @@ function FnClock {var d, mo, y, h, mi, s : integer} : integer;
 { Network time in the zone set on the FujiNet's SD card.  y is the      }
 { full year.  The clock commands take one parameter byte; 0 is sent.    }
 var rc : integer;
+    req : Str255;
+    at  : integer;
 begin
    d := 0;
    mo := 0;
@@ -803,6 +1088,23 @@ begin
    h := 0;
    mi := 0;
    s := 0;
+   if fnVia = fnViaMb then begin        { REV V: CLOCK -> "OK yyyy mm dd hh mi ss" (firmware 0.5) }
+      req := 'CLOCK';
+      rc := FnMbAsk(req, fnMbWait);
+      if rc = fnOK then begin
+         FnMbTxt(req);
+         at := 3;
+         y  := FnMbVal(req, at);
+         mo := FnMbVal(req, at);
+         d  := FnMbVal(req, at);
+         h  := FnMbVal(req, at);
+         mi := FnMbVal(req, at);
+         s  := FnMbVal(req, at);
+         if y < 2000 then rc := fnShort
+      end;
+      FnClock := rc;
+      exit(FnClock)
+   end;
    rc := FnCall(fnDClock, 147, 1, 0, 0, 0, fnTmo);      { 93 }
    if rc = fnOK then begin
       if fnPlLen < 6 then
@@ -830,6 +1132,14 @@ var rc : integer;
     lo : longint;
     hi : longint;
 begin
+   if fnVia = fnViaMb then begin        { REV V: the drive holds the whole page; nothing to ask }
+      fnWait := fnMbTot - fnMbOff;
+      if fnWait < 0 then fnWait := 0;
+      fnConn := 1;
+      if fnWait = 0 then fnStat := 136 else fnStat := 1;
+      FnNStat := fnOK;
+      exit(FnNStat)
+   end;
    rc := FnCall(fnDN1, 83, 0, 0, 0, 0, fnStMs);         { 53 }
    if rc = fnOK then begin
       if fnPlLen < 4 then
@@ -852,6 +1162,9 @@ function FnNOpen {var url : Str255; opMode, trans : integer} : integer;
 { trans 0 = no line-end translation.  fnOK means both calls were        }
 { answered; LOOK AT fnStat before reading: it must be 1.                 }
 var rc, i, n, b : integer;
+    req, ans    : Str255;
+    at          : integer;
+    code        : longint;
 begin
    fnIsOpen := false;
    fnWait := 0;
@@ -860,6 +1173,39 @@ begin
    n := length(url);
    if (n < 1) or (n > fnOutMax - 1) then begin
       FnNOpen := fnBadArg;
+      exit(FnNOpen)
+   end;
+   if fnVia = fnViaMb then begin        { REV V: OPEN <url> -> "OK <bytes> <http code>[ truncated]" }
+      fnMbOff := 0;
+      fnMbTot := 0;
+      req := url;
+      if n > 3 then
+         if (req[2] = '1') and (req[3] = ':') then
+            if (req[1] = 'N') or (req[1] = 'n') then
+               req := copy(url, 4, n - 3);          { the drive wants a plain address }
+      req := concat('OPEN ', req);
+      rc := FnMbAsk(req, fnMbWait);
+      if rc = fnNakd then begin                     { the drive said ERROR ...: no connection }
+         fnStat := 207;
+         fnConn := 0;
+         FnNOpen := fnOK;
+         exit(FnNOpen)
+      end;
+      if rc <> fnOK then begin
+         FnNOpen := rc;
+         exit(FnNOpen)
+      end;
+      FnMbTxt(ans);
+      at := 3;
+      fnMbTot := FnMbVal(ans, at);
+      code := FnMbVal(ans, at);
+      fnIsOpen := true;
+      fnConn := 1;
+      fnWait := fnMbTot;
+      if code = 404 then fnStat := 170
+      else if fnMbTot = 0 then fnStat := 136
+      else fnStat := 1;
+      FnNOpen := fnOK;
       exit(FnNOpen)
    end;
    for i := 1 to n do begin
@@ -884,11 +1230,31 @@ function FnNRead {cnt : integer} : integer;
 { READ cnt bytes; they arrive as the reply data (FnPlB, fnPlLen).       }
 { Refused unless the unit is open and 1 <= cnt <= 256 and cnt is no     }
 { more than the last STATUS said is waiting.  Never repeated.           }
-var rc : integer;
+var rc  : integer;
+    req : Str255;
+    part : Str255;
 begin
    if (not fnIsOpen) or (cnt < 1) or (cnt > fnRdMax)
       or (cnt > fnWait) then begin
       FnNRead := fnBadArg;
+      exit(FnNRead)
+   end;
+   if fnVia = fnViaMb then begin        { REV V: READ <offset> <count> }
+      FnNum(fnMbOff, part);
+      req := concat('READ ', concat(part, ' '));
+      FnNum(cnt, part);
+      req := concat(req, part);
+      rc := FnMbAsk(req, fnMbWait);
+      if rc = fnOK then begin
+         if fnPlLen < 1 then
+            rc := fnShort
+         else begin
+            fnMbOff := fnMbOff + fnPlLen;
+            fnWait := fnMbTot - fnMbOff;
+            if fnWait < 0 then fnWait := 0
+         end
+      end;
+      FnNRead := rc;
       exit(FnNRead)
    end;
    rc := FnCall(fnDN1, 82, 5, cnt, 0, 0, fnTmo);      { 52 }
@@ -906,8 +1272,8 @@ end;
 function FnNWrit {cnt : integer} : integer;
 { WRITE cnt bytes taken from fnOut.  Never repeated. }
 begin
-   if (not fnIsOpen) or (cnt < 1) or (cnt > fnOutMax) then
-      FnNWrit := fnBadArg
+   if (fnVia = fnViaMb) or (not fnIsOpen) or (cnt < 1) or (cnt > fnOutMax) then
+      FnNWrit := fnBadArg            { REV V: the mailbox path is read-only }
    else
       FnNWrit := FnCall(fnDN1, 87, 5, cnt, 0, cnt, fnTmo)  { 57 }
 end;
@@ -915,8 +1281,21 @@ end;
 function FnNClos : integer;
 { CLOSE.  The FujiNet answers NAK after a failed transfer, so any       }
 { reply at all counts as closed.                                         }
-var rc : integer;
+var rc  : integer;
+    req : Str255;
 begin
+   if fnVia = fnViaMb then begin        { REV V: CLOSE, if a page is open; always "closed" }
+      if fnIsOpen then begin
+         req := 'CLOSE';
+         rc := FnMbAsk(req, fnMbWait)
+      end;
+      fnIsOpen := false;
+      fnWait := 0;
+      fnMbOff := 0;
+      fnMbTot := 0;
+      FnNClos := fnOK;
+      exit(FnNClos)
+   end;
    rc := FnCall(fnDN1, 67, 0, 0, 0, 0, fnTmo);          { 43 }
    if rc = fnNakd then
       rc := fnOK;
@@ -994,6 +1373,11 @@ var rc, i, b, tries : integer;
     told           : boolean;
     ip, part, body : Str255;
 begin
+   if fnVia = fnViaMb then begin        { REV V: an ESProFile has no line speed }
+      stage := 0;
+      FnSetBd := fnBadArg;
+      exit(FnSetBd)
+   end;
    stage := 1;
    FnSetBd := fnPortEr;
    if not FnPortUp(oldBd) then
@@ -1176,6 +1560,15 @@ function FnFind {var baud : longint} : integer;
 var rc, i : integer;
     b2    : longint;
 begin
+   if fnVia = fnViaMb then begin        { REV V: found already }
+      FnFind := fnOK;
+      exit(FnFind)
+   end;
+   if not fnFound then                  { REV V: an ESPFuji on the tool's volume wins }
+      if FnMbUp then begin
+         FnFind := fnOK;
+         exit(FnFind)
+      end;
    fnFound := true;
    FnPortDn;
    b2 := baud;
@@ -1206,7 +1599,9 @@ procedure FnSpdMsg {rc, stage : integer; baud : longint; var msg : Str255};
 var part, part2 : Str255;
 begin
    FnNum(baud, part);
-   if stage = 0 then
+   if fnVia = fnViaMb then
+      msg := 'Through the ESProFile: there is no line speed to set.'
+   else if stage = 0 then
       msg := concat('Already at ', concat(part, ' baud.'))
    else if (rc = fnOK) and (stage = 7) then
       msg := concat('FujiNet already at ', concat(part, ' baud; following it.'))

@@ -1,8 +1,15 @@
 program LisaFuji;
 
-{ LFJ-MAIN.TEXT -- LisaFuji  ***  1.1 REV P  ***                         }
+{ LFJ-MAIN.TEXT -- LisaFuji  ***  1.2 REV V  ***                         }
+{ REV V  27-Oct-2026  ESPFuji: when MAILBOX.DATA is on this tool's      }
+{                      volume and an ESProFile answers, the network     }
+{                      goes through the drive (FnBus REV V, fnVia); the }
+{                      port name reads 'the ESProFile'.  FnSetVol.       }
 { REV P  17-Oct-2026  Weather icons (LfjMore WxPaint, from DrawShow   }
 {                      like the map); the sky column moves to x 130.  }
+{ REV Z  30-Oct-2026  RELEASE 1.2: About says LisaFuji 1.2 (30 October).   }
+{ REV Y  29-Oct-2026  Home line says ESProFile when the mailbox is in  }
+{        use; P on page 1 of a list or article steps back out.        }
 { REV O  17-Oct-2026  1.1: P = who is aboard the space stations (ISS  }
 {                      and Tiangong), O = the weather in your town,   }
 {                      both read by the new unit LfjMore (LFJ/MORE).  }
@@ -314,7 +321,9 @@ end;
 procedure PortNm (var s : Str255);
 { REV R.  'Serial A' or 'Serial B': where the FujiNet is. }
 begin
-   if fnPortA then
+   if fnVia = fnViaMb then              { REV V }
+      s := 'the ESProFile'
+   else if fnPortA then
       s := 'Serial A'
    else
       s := 'Serial B'
@@ -329,8 +338,12 @@ begin
    LogMode;
    FnNum(curBaud, part);
    PortNm(big);                         { REV R: Serial A or B }
-   big := concat(lfjVersion, concat('     ', concat(big, ', ')));
-   big := concat(big, concat(part, ' baud'));
+   if fnVia = fnViaMb then              { REV X: no baud rate on the drive }
+      big := concat(lfjVersion, concat('     ', big))
+   else begin
+      big := concat(lfjVersion, concat('     ', concat(big, ', ')));
+      big := concat(big, concat(part, ' baud'))
+   end;
    AddBig(big);
    AddLine(ttl);
    row := '';
@@ -378,6 +391,13 @@ begin
    big := concat(lead, concat('FAIL: ', reason));
    SetBig(big);
    if (rc = fnNoRep) or (rc = fnStall) or (rc = fnBadFr) then begin
+      if (fnVia <> fnViaMb) and (fnMbEc <> 0) then begin   { REV X: the mailbox was looked for and }
+         FnNum(fnMbEc, reason);                           { was not there: say where it looked }
+         big := concat('   no MAILBOX.DATA on ', concat(fnVol, concat(' (ec ', concat(reason, '): put LisaFuji beside the ESPFuji tool'))));
+         if length(big) > 78 then big := copy(big, 1, 78);   { copy() past the end gives '' (notes 93) }
+         row := big;
+         AddLine(row)
+      end;
       if fnPortA then                   { REV R }
          row := '   Check: FujiNet powered?  Cable on Serial A, no null modem?'
       else
@@ -862,8 +882,12 @@ var row : StatStr;
 begin
    promptOn := false;
    quiet := true;
-   row := 'News, Wikipedia, space, weather and tests: an RS-232 FujiNet on Serial ';
-   if fnPortA then row := concat(row, 'A.') else row := concat(row, 'B.');
+   if fnVia = fnViaMb then             { REV Y: say which way we talk }
+      row := 'News, Wikipedia, space, weather and tests: through the ESProFile.'
+   else begin
+      row := 'News, Wikipedia, space, weather and tests: an RS-232 FujiNet on Serial ';
+      if fnPortA then row := concat(row, 'A.') else row := concat(row, 'B.')
+   end;
    Head(row);
    row := 'N = the news: headlines and articles from the FujiNet news service';
    AddLine(row);
@@ -1848,6 +1872,8 @@ begin
          else if (ch = 'P') or (ch = 'p') then begin
             if nwPage > 1 then
                NwList(nwCat, nwPage - 1)
+            else
+               NwCats                  { REV Y: from page 1, P steps back out }
          end
          else if (ch = 'R') or (ch = 'r') then
             NwList(nwCat, nwPage);
@@ -1859,6 +1885,8 @@ begin
          else if (ch = 'P') or (ch = 'p') then begin
             if nwAPage > 1 then
                NwArt(nwArtId, nwAPage - 1)
+            else
+               NwHDraw                 { REV Y: from page 1, P steps back out }
          end
          else if (ch = 'H') or (ch = 'h') then
             NwHDraw
@@ -2189,6 +2217,10 @@ begin
          else if (ch = 'P') or (ch = 'p') then begin
             if wkAPage > 1 then
                WkArt(wkArtId, wkAPage - 1)
+            else if wkRCnt > 0 then      { REV Y: from page 1, P steps back out }
+               WkRDraw
+            else
+               WkAsk
          end
          else if (ch = 'L') or (ch = 'l') then begin
             if wkRCnt > 0 then
@@ -3045,6 +3077,8 @@ begin
    IsInit;
    MrInit;                             { REV O: the crew and weather pages }
    if IsLoad(myVol) then ;             { REV J: your town, if HOMETOWN.DATA is there }
+   FnSetVol(myVol);                     { REV V: where MAILBOX.DATA (an ESPFuji) is looked for }
+   if FnMbUp then ;                     { REV X: probe it now, so the header is right from the start }
    if FnCfgLd(myVol, curBaud) then ;   { REV S: the speed and port last used, if FNSPEED.DATA is there }
 
    InitMP(theHeap, myPrefix, @AlertFailed, alertVerNum,
@@ -3093,5 +3127,6 @@ begin { main program }
 
    until toldToDie;
 
+   FnMbDn;                              { REV V: MAILBOX.DATA, if it was open }
    termErr := 0
 end.

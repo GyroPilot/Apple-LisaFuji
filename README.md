@@ -2,13 +2,20 @@
 
 A FujiNet client for the Apple Lisa Office System: the news, Wikipedia, where the International Space Station is (on a
 world map, with how far it is from your town), who is aboard the space stations, the weather in your town (with a
-little picture for each day), and the time from the network -- through a FujiNet for RS-232 on Serial B.
+little picture for each day), and the time from the network -- through a FujiNet for RS-232 on Serial B, a LisaNet,
+or an ESPFuji ESProFile (the drive the Lisa boots from; no serial adapter).
 
 Tool number **419312** in the GyroPilot series. Written in Lisa Pascal with the Workshop 3.0 toolchain for Lisa Office
 System 3.1.
 
 ## Status
 
+- **1.2 (REV Z) -- released 30 October 2026.** Through an **ESPFuji** ESProFile as well as a serial FujiNet: when the tool
+  sits on an ESProFile volume that runs ESPFuji (https://github.com/GyroPilot/ESPFuji) it finds the mailbox at launch,
+  the header says "the ESProFile", and news, Wikipedia, the station, the crew, the weather and the clock all come
+  through the drive (Lisa 2/10, 28-29 October 2026; CLOCK set the Lisa from the drive). When a fetch fails the Check
+  line says why in words. P on page 1 of a list or article steps back out. Release floppy `releases/LISAFUJI_1_2.dc42`
+  (replaces the 1.2 beta of 23 October). The sources here are 1.2 (REV Z); the last two changes were checked in LisaEm.
 - **1.0** -- tested on a Lisa 2/10 with a real FujiNet, 17 October 2026 (`releases/LISAFUJI_1_0.dc42`).
 - **1.1** -- who is aboard (P), the weather in your town with pictures (O), the Weather menu. Tested on the 2/10,
   19 October 2026 (`releases/LISAFUJI_1_1.dc42`).
