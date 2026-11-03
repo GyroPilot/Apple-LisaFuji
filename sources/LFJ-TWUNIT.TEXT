@@ -1,8 +1,8 @@
 unit TwcUnit;
-{ LFJ-TWUNIT.TEXT -- LisaFuji: unit TwcUnit, IDENTICAL to LisaTwinClock }
-{ 0.1 REV A's TWC-UNIT.TEXT.  Kept as a copy so LisaFuji builds on its   }
-{ own; any change belongs in both files.  Used by the C command (set the }
-{ Lisa's clock from the network, twin year, TWINYEAR.DATA note).          }
+{ LFJ-TWUNIT.TEXT -- unit TwcUnit, a copy of LisaTwinClock REV K's        }
+{ TWC-UNIT.TEXT (2 Nov 2026: a damaged TWINYEAR.DATA no longer blocks  }
+{ the note: kill and remake, else TWINYEAR2.DATA, load the newer one). }
+{ Kept as a copy so the tool builds on its own; change both together.  }
 
 { REV A  10-Oct-2026  First version: twin-year arithmetic, the clock    }
 {                      read and set, and the note file.  Written to be  }
@@ -76,9 +76,7 @@ function  TwLoad   (var vol : E_Name; var realY, m, d, twinY : integer) : boolea
 
 IMPLEMENTATION
 
-{ LisaFuji REV E: this unit's code goes in its own segment.  LisaFuji's }
-{ code passed the 32K limit of one segment when this unit was added;    }
-{ the Lisa swaps segments in as they are called.                         }
+{ This unit's code goes in its own segment (LisaFuji REV E, 32K limit). }
 {$S LFJTwUn}
 
 {------------------------------------------------------------------------}
@@ -366,15 +364,47 @@ begin
    TwGetN := ok
 end;
 
-function TwSave {var vol : E_Name; realY, m, d, twinY : integer} : boolean;
-{ Write TWINYEAR.DATA on volume vol.  890 from MAKE_FILE = it already   }
-{ exists, which is fine.  FALSE and twEcode on failure.                 }
-var path     : Pathname;
-    refnum   : integer;
+function TwPutF (var path : Pathname) : boolean;
+{ REV K: write twBuf (twRecLen bytes) to one note file.  890 from        }
+{ MAKE_FILE = it already exists, which is fine.  twEcode on failure.     }
+var refnum   : integer;
     wrote    : longint;
     ec       : integer;
     schedErr : integer;
+begin
+   TwPutF := false;
+   Sched_Class(schedErr, false);
+   MAKE_FILE(twEcode, path, 0);
+   Sched_Class(schedErr, true);
+   if (twEcode > 0) and (twEcode <> 890) then
+      exit(TwPutF);
+   Sched_Class(schedErr, false);
+   OPEN(twEcode, path, refnum, [DWrite]);
+   Sched_Class(schedErr, true);
+   if twEcode > 0 then
+      exit(TwPutF);
+   Sched_Class(schedErr, false);
+   WRITE_DATA(twEcode, refnum, ord4(@twBuf), twRecLen, wrote, sequential, 0);
+   if (twEcode <= 0) and (wrote = twRecLen) then begin
+      TRUNCATE(ec, refnum);
+      TwPutF := true
+   end;
+   CLOSE_OBJECT(ec, refnum);
+   Sched_Class(schedErr, true)
+end;
+
+function TwSave {var vol : E_Name; realY, m, d, twinY : integer} : boolean;
+{ Write the note on volume vol.  REV K 1-Nov-2026: a damaged            }
+{ TWINYEAR.DATA (OS 663, a block with a bad checksum, seen on the 2/10)  }
+{ no longer blocks the note: the file is killed and made again, and if   }
+{ that fails too the note goes to TWINYEAR2.DATA.  TwLoad reads both.    }
+{ FALSE and twEcode (the first failure) when nothing could be written.  }
+var path     : Pathname;
+    ec       : integer;
+    first    : integer;
+    schedErr : integer;
     i        : integer;
+    ok       : boolean;
 begin
    TwSave := false;
    twEcode := 0;
@@ -387,58 +417,51 @@ begin
    TwPutN(12, 2, d);
    TwPutN(15, 4, twinY);
    twBuf[19] := 13;
-
    path := concat(vol, 'TWINYEAR.DATA');
-   Sched_Class(schedErr, false);
-   MAKE_FILE(twEcode, path, 0);
-   Sched_Class(schedErr, true);
-   if (twEcode > 0) and (twEcode <> 890) then
-      exit(TwSave);
-   Sched_Class(schedErr, false);
-   OPEN(twEcode, path, refnum, [DWrite]);
-   Sched_Class(schedErr, true);
-   if twEcode > 0 then
-      exit(TwSave);
-   Sched_Class(schedErr, false);
-   WRITE_DATA(twEcode, refnum, ord4(@twBuf), twRecLen, wrote, sequential, 0);
-   if (twEcode <= 0) and (wrote = twRecLen) then begin
-      TRUNCATE(ec, refnum);
-      TwSave := true
+   ok := TwPutF(path);
+   if not ok then begin
+      first := twEcode;
+      Sched_Class(schedErr, false);
+      KILL_OBJECT(ec, path);
+      Sched_Class(schedErr, true);
+      ok := TwPutF(path);
+      if not ok then begin
+         path := concat(vol, 'TWINYEAR2.DATA');
+         ok := TwPutF(path)
+      end;
+      if not ok then twEcode := first
    end;
-   CLOSE_OBJECT(ec, refnum);
-   Sched_Class(schedErr, true);
-   if twEcode < 0 then twEcode := 0
+   if ok then twEcode := 0;
+   TwSave := ok
 end;
 
-function TwLoad {var vol : E_Name; var realY, m, d, twinY : integer} : boolean;
-{ Read TWINYEAR.DATA from volume vol.  FALSE if it is missing, short or }
-{ not in the TW1 layout.  A short read arrives with a nonzero ecode     }
-{ (LISACom lesson), so the byte count decides, never the ecode.         }
-var path     : Pathname;
-    refnum   : integer;
+function TwGetF (var path : Pathname; var realY, m, d, twinY : integer) : boolean;
+{ REV K: read one note file.  FALSE if it is missing, unreadable, short  }
+{ or not in the TW1 layout.  A short read arrives with a nonzero ecode   }
+{ (LISACom lesson), so the byte count decides, never the ecode.          }
+var refnum   : integer;
     got      : longint;
     ec       : integer;
     schedErr : integer;
     ok       : boolean;
 begin
-   TwLoad := false;
+   TwGetF := false;
    realY := 0;
    m := 0;
    d := 0;
    twinY := 0;
-   path := concat(vol, 'TWINYEAR.DATA');
    Sched_Class(schedErr, false);
    OPEN(ec, path, refnum, [DRead]);
    Sched_Class(schedErr, true);
    if ec > 0 then
-      exit(TwLoad);
+      exit(TwGetF);
    got := 0;
    Sched_Class(schedErr, false);
    READ_DATA(ec, refnum, ord4(@twBuf), twRecLen, got, sequential, 0);
    CLOSE_OBJECT(ec, refnum);
    Sched_Class(schedErr, true);
    if got < twRecLen then
-      exit(TwLoad);
+      exit(TwGetF);
    ok := (twBuf[0] = ord('T')) and (twBuf[1] = ord('W'))
          and (twBuf[2] = ord('1'));
    if ok then ok := TwGetN(4, 4, realY);
@@ -449,7 +472,39 @@ begin
       ok := (realY >= twLoReal) and (realY <= twHiReal)
             and (m >= 1) and (m <= 12) and (d >= 1) and (d <= 31)
             and (twinY >= twMinYr) and (twinY <= twMaxYr);
-   TwLoad := ok
+   TwGetF := ok
+end;
+
+function TwLoad {var vol : E_Name; var realY, m, d, twinY : integer} : boolean;
+{ Read the note from volume vol: TWINYEAR.DATA and (REV K) the spare     }
+{ TWINYEAR2.DATA; when both are good the later date wins.                }
+var path   : Pathname;
+    ok1    : boolean;
+    ok2    : boolean;
+    y2     : integer;
+    m2     : integer;
+    d2     : integer;
+    t2     : integer;
+    k1     : longint;
+    k2     : longint;
+begin
+   path := concat(vol, 'TWINYEAR.DATA');
+   ok1 := TwGetF(path, realY, m, d, twinY);
+   path := concat(vol, 'TWINYEAR2.DATA');
+   ok2 := TwGetF(path, y2, m2, d2, t2);
+   if ok2 then begin
+      k2 := y2;
+      k2 := k2 * 400 + m2 * 31 + d2;
+      k1 := realY;
+      k1 := k1 * 400 + m * 31 + d;
+      if (not ok1) or (k2 > k1) then begin
+         realY := y2;
+         m := m2;
+         d := d2;
+         twinY := t2
+      end
+   end;
+   TwLoad := ok1 or ok2
 end;
 
 end.

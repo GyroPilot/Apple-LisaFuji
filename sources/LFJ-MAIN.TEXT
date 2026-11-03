@@ -393,7 +393,7 @@ begin
    if (rc = fnNoRep) or (rc = fnStall) or (rc = fnBadFr) then begin
       if (fnVia <> fnViaMb) and (fnMbEc <> 0) then begin   { REV X: the mailbox was looked for and }
          FnNum(fnMbEc, reason);                           { was not there: say where it looked }
-         big := concat('   no MAILBOX.DATA on ', concat(fnVol, concat(' (ec ', concat(reason, '): put LisaFuji beside the ESPFuji tool'))));
+         big := concat('   no ESPFuji mailbox on ', concat(fnVol, concat(' (ec ', concat(reason, '): put LisaFuji beside the ESPFuji tool'))));
          if length(big) > 78 then big := copy(big, 1, 78);   { copy() past the end gives '' (notes 93) }
          row := big;
          AddLine(row)
@@ -486,9 +486,64 @@ var rc, st : integer;
     ip     : Str255;
     part   : Str255;
     big    : Str255;
+    req    : Str255;
+    j      : integer;
 begin
    row := '2. Adapter and WiFi:  asking ...';
    AddLine(row);
+   if fnVia = fnViaMb then begin        { REV AB 1-Nov-2026: the ESProFile has no }
+      req := 'HELLO';                   { adapter-config call; ask HELLO + WIFI }
+      rc := FnMbAsk(req, fnMbWait);
+      if rc <> fnOK then begin
+         lead := '2. Adapter and WiFi:  ';
+         SayFail(lead, rc);
+         Test2 := false;
+         exit(Test2)
+      end;
+      FnMbTxt(req);
+      i := pos(' up ', req);
+      if i > 1 then ver := copy(req, 1, i - 1) else ver := req;
+      req := 'WIFI';
+      rc := FnMbAsk(req, fnMbWait);
+      ssid := '';
+      ip := '';
+      if rc = fnOK then begin
+         FnMbTxt(req);
+         i := pos('ssid ', req);
+         j := pos(' status', req);
+         if (i > 0) and (j > i + 5) then ssid := copy(req, i + 5, j - i - 5);
+         i := pos(' ip ', req);
+         if (i > 0) and (length(req) > i + 4) then begin
+            part := copy(req, i + 4, length(req) - i - 3);
+            j := pos(' ', part);
+            if j > 1 then ip := copy(part, 1, j - 1) else ip := part
+         end
+      end;
+      if length(ssid) = 0 then ssid := '(none)';
+      if length(ip) = 0 then ip := '(none)';
+      row := '2. Adapter and WiFi:  PASS   (through the ESProFile)';
+      SetLast(row);
+      big := concat('     Network: ', ssid);
+      AddBig(big);
+      big := concat('     Address: ', ip);
+      AddBig(big);
+      rc := FnWifi(st);
+      big := concat('     Firmware: ', ver);
+      if rc <> fnOK then
+         big := concat(big, '     WiFi: no answer')
+      else if st = 3 then
+         big := concat(big, '     WiFi: connected')
+      else
+         big := concat(big, '     WiFi: NOT connected');
+      AddBig(big);
+      FnSigTxt(part);
+      if length(part) > 0 then begin
+         big := concat('     WiFi signal: ', part);
+         AddBig(big)
+      end;
+      Test2 := true;
+      exit(Test2)
+   end;
    rc := FnAdCfg;
    if rc <> fnOK then begin
       lead := '2. Adapter and WiFi:  ';
@@ -534,6 +589,11 @@ begin
       big := concat(big, concat('     WiFi: status ', part))
    end;
    AddBig(big);
+   FnSigTxt(part);                       { 1 Nov 2026: the ESProFile reports it }
+   if length(part) > 0 then begin
+      big := concat('     WiFi signal: ', part);
+      AddBig(big)
+   end;
    if allZip then begin
       row := '     No address yet: check the WiFi name and password on the SD card.';
       AddLine(row)
@@ -669,6 +729,8 @@ begin
       FnNum(fnStat, part);
       if fnStat = 170 then
          big := 'Open:  NOT FOUND (status 170).  The server has no such file.'
+      else if (fnStat = 207) and (fnVia = fnViaMb) and (length(fnMbWhy) > 0) then
+         big := concat('Open:  the drive said: ', fnMbWhy)   { 2 Nov: the drive's own reason }
       else if fnStat = 207 then
          big := 'Open:  NO CONNECTION (status 207).  The server was not reached.'
       else
@@ -1454,6 +1516,8 @@ begin
       FnNum(fnStat, part);
       if fnStat = 170 then
          big := concat('Status 170: ', concat(svcName, ' was not found.'))
+      else if (fnStat = 207) and (fnVia = fnViaMb) and (length(fnMbWhy) > 0) then
+         big := concat('The drive said: ', fnMbWhy)   { 2 Nov: the drive's own reason }
       else if fnStat = 207 then
          big := concat('Status 207: no connection to ', concat(svcName, '.'))
       else

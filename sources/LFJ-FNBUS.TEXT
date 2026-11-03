@@ -103,6 +103,7 @@ const
    { REV V: the ESPFuji mailbox as a second back end }
    fnViaSer = 0;              { fnVia: the serial FujiNet (or PCFuji) }
    fnViaMb  = 1;              { fnVia: an ESProFile running ESPFuji, through MAILBOX.DATA }
+   fnMbName = 'ESPFuji Mailbox';  { 1 Nov 2026; MAILBOX.DATA is still looked for }
    fnMbPgs  = 256;            { pages in MAILBOX.DATA }
    fnMbPayl = 492;            { payload bytes in a mailbox page }
    fnMbWait = 40000;          { ms a mailbox reply may take (the drive fetches the whole page first) }
@@ -148,6 +149,7 @@ var
    fnMbOff  : longint;        { REV V: bytes of the open page already read }
    fnMbTot  : longint;        { REV V: bytes the drive holds for the open page }
    fnMbEc   : integer;        { REV V: OS ecode of the last failed mailbox call }
+   fnRssi   : integer;        { 1 Nov 2026: WiFi signal in dBm from the last WIFI answer; 0 = not known }
    fnMbRnd  : integer;        { REV V: reads it took to see the last reply (for show) }
    fnMbWhy  : string[80];     { REV V: the drive's ERROR text }
 
@@ -191,6 +193,7 @@ function  FnMbAsk  (var req : Str255; waitMs : longint) : integer;
 procedure FnMbTxt  (var s : Str255);
 function  FnMbVal  (var s : Str255; var at : integer) : longint;
 procedure FnNum    (n : longint; var txt : Str255);
+procedure FnSigTxt (var s : Str255);
 procedure FnHex    (v : integer; var txt : Str255);
 
 
@@ -235,6 +238,7 @@ begin
    fnMbOff  := 0;
    fnMbTot  := 0;
    fnMbEc   := 0;
+   fnRssi   := 0;
    fnMbRnd  := 0;
    fnMbWhy  := '';
    fnPnp    := '-RS232B'
@@ -271,7 +275,7 @@ begin
 end;
 
 function FnMbUp : boolean;
-{ Open MAILBOX.DATA on fnVol if it is there (it is NOT created here: the  }
+{ Open the mailbox on fnVol if it is there (it is NOT created here: the  }
 { ESPFuji tool makes it), then HELLO with a short wait.  TRUE: an ESPFuji }
 { answered and fnVia is fnViaMb.  FALSE: fnVia stays as it was.           }
 var path     : Pathname;
@@ -287,9 +291,13 @@ begin
    if length(fnVol) = 0 then
       exit(FnMbUp);
    if not fnMbIsUp then begin
-      path := concat(fnVol, 'MAILBOX.DATA');
+      path := concat(fnVol, fnMbName);
       Sched_Class(schedErr, false);
       OPEN(ec, path, fnMbRef, [DRead, DWrite]);
+      if ec > 0 then begin               { 1 Nov 2026: the name used before }
+         path := concat(fnVol, 'MAILBOX.DATA');
+         OPEN(ec, path, fnMbRef, [DRead, DWrite])
+      end;
       Sched_Class(schedErr, true);
       if ec > 0 then begin
          fnMbEc := ec;
@@ -405,7 +413,7 @@ begin
                      if (FnPlB(0) = 69) and (FnPlB(1) = 82) and (FnPlB(2) = 82) then begin
                         FnMbTxt(tmp);                    { ERROR ... }
                         n := length(tmp);
-                        if n > 80 then n := 80;
+                        if n > 60 then n := 60;    { 2 Nov: 'the drive said: ' + it fits 80 }
                         if n = 0 then fnMbWhy := '' else fnMbWhy := copy(tmp, 1, n);
                         FnMbAsk := fnNakd
                      end;
@@ -1034,12 +1042,17 @@ begin
 end;
 
 function FnWifi {var st : integer} : integer;
-{ WiFi status byte: 3 = connected, 6 = disconnected. }
+{ WiFi status byte: 3 = connected, 6 = disconnected.  On the ESProFile    }
+{ route the signal is kept in fnRssi (1 Nov 2026).                        }
 var rc : integer;
     req : Str255;
     i   : integer;
+    v   : integer;
+    c   : char;
+    go  : boolean;
 begin
    st := 0;
+   fnRssi := 0;
    if fnVia = fnViaMb then begin        { REV V: WIFI -> "ssid X status connected ip ..." }
       req := 'WIFI';
       rc := FnMbAsk(req, fnMbWait);
@@ -1047,7 +1060,23 @@ begin
          FnMbTxt(req);
          st := 6;
          i := pos('status connected', req);
-         if i > 0 then st := 3
+         if i > 0 then st := 3;
+         i := pos('rssi -', req);       { 1 Nov 2026: "... rssi -41 ..." }
+         if i > 0 then begin
+            i := i + 6;
+            v := 0;
+            go := true;
+            while go and (i <= length(req)) do begin
+               c := req[i];
+               if (c >= '0') and (c <= '9') and (v < 200) then begin
+                  v := v * 10 + (ord(c) - ord('0'));
+                  i := i + 1
+               end
+               else
+                  go := false
+            end;
+            if (v > 0) and (v < 200) then fnRssi := -v
+         end
       end;
       FnWifi := rc;
       exit(FnWifi)
@@ -1060,6 +1089,22 @@ begin
          st := FnPlB(0)
    end;
    FnWifi := rc
+end;
+
+procedure FnSigTxt {var s : Str255};
+{ The signal from the last WIFI answer in words, e.g. 'strong (-41 dBm)'; }
+{ empty when it is not known (a serial FujiNet does not report it).      }
+var part : Str255;
+begin
+   s := '';
+   if fnRssi < 0 then begin
+      FnNum(-fnRssi, part);
+      if fnRssi >= -50 then s := 'strong'
+      else if fnRssi >= -60 then s := 'good'
+      else if fnRssi >= -70 then s := 'fair'
+      else s := 'weak';
+      s := concat(s, concat(' (-', concat(part, ' dBm)')))
+   end
 end;
 
 function FnAdCfg : integer;

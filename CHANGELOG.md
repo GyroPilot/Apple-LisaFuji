@@ -1,5 +1,13 @@
 # LisaFuji changelog
 
+## 1.2 update 1 (REV AC) -- 3 Nov 2026 -- RELEASE (tested on the 2/10, 3 Nov)
+- Test 2 through an ESProFile shows the network name, the address, the ESPFuji firmware and the WiFi signal (e.g.
+  "strong (-35 dBm)").
+- A failed connection through an ESProFile now shows the ESProFile's own reason ("the drive said: ...") instead of
+  only "status 207".
+- It looks for the mailbox as "ESPFuji Mailbox" first, then MAILBOX.DATA, so old setups keep working.
+- A damaged TWINYEAR.DATA no longer stops it setting the clock: the note is remade, or kept in TWINYEAR2.DATA, and the
+  newer good one is read (as LisaTwinClock).
 ## 1.2 REV V-Z -- 27-30 Oct 2026 -- RELEASE 1.2 (REV Z = REV Y with the version shown as 1.2)
 - The ESProFile mailbox as a third back end, inside FnBus (fnVia): a MAILBOX.DATA file on the tool's own volume is an
   ESPFuji drive; requests go into the file and the drive answers in it. Found at launch (FnMbUp), so the header reads
